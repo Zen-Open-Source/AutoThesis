@@ -2,6 +2,8 @@
 
 AutoThesis.finance is a local Rust web app for iterative stock research. Enter a ticker, start a run, and the app will search, extract evidence, critique its own memo, and publish a final research memo with sources and iteration history.
 
+The project is inspired by Andrej Karpathy's `autoresearch` pattern: instead of generating a memo in one pass, AutoThesis runs a closed loop of planning, searching, reading, writing, critiquing, and refining over multiple iterations.
+
 ## Requirements
 
 - Rust stable (`cargo`, `rustc`)
