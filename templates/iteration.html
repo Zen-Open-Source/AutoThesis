@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+
+{% block title %}Iteration {{ iteration.iteration.iteration_number }} · {{ run.ticker }}{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h1>{{ run.ticker }} · Iteration {{ iteration.iteration.iteration_number }}</h1>
+  <p><a href="/runs/{{ run.id }}">Back to run</a></p>
+  <div class="meta-grid">
+    <div><strong>Status:</strong> <span class="badge badge-{{ iteration.iteration.status }}">{{ iteration.iteration.status }}</span></div>
+    <div><strong>Created:</strong> {{ iteration.iteration.created_at }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Plan</h2>
+  <div class="memo-body">{{ plan_html|safe }}</div>
+</section>
+
+<section class="panel">
+  <h2>Search queries</h2>
+  <ul>
+    {% for query in iteration.search_queries %}
+      <li>{{ query.query_text }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Selected sources</h2>
+  <div class="source-list">
+    {% for source in iteration.sources %}
+      <article class="source-card">
+        <h3><a href="{{ source.url }}">{{ source.title.as_deref().unwrap_or(source.url.as_str()) }}</a></h3>
+        <p>{{ source.source_type.as_deref().unwrap_or("unknown") }} · {{ source.domain.as_deref().unwrap_or("n/a") }}</p>
+        {% if source.excerpt.is_some() %}<p>{{ source.excerpt.as_ref().unwrap() }}</p>{% endif %}
+      </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Evidence notes</h2>
+  {% for note in iteration.evidence_notes %}
+    <article class="note-card">
+      <div class="badge badge-event">{{ note.claim_type.as_deref().unwrap_or("unspecified") }}</div>
+      <div class="memo-body">{{ note.note_html|safe }}</div>
+    </article>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Draft</h2>
+  <div class="memo-body">{{ draft_html|safe }}</div>
+</section>
+
+<section class="panel">
+  <h2>Critique</h2>
+  <div class="memo-body">{{ critique_html|safe }}</div>
+</section>
+
+<section class="panel">
+  <h2>Evaluation</h2>
+  {% if evaluation.is_some() %}
+    <div class="meta-grid">
+      <div><strong>Improved:</strong> {{ evaluation.as_ref().unwrap().improved }}</div>
+      <div><strong>Score:</strong> {{ evaluation.as_ref().unwrap().score }}</div>
+      <div><strong>Continue:</strong> {{ evaluation.as_ref().unwrap().should_continue }}</div>
+    </div>
+    <p>{{ evaluation.as_ref().unwrap().reasoning }}</p>
+  {% else %}
+    <p>No evaluation recorded.</p>
+  {% endif %}
+</section>
+{% endblock %}

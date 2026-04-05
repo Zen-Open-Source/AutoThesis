@@ -1,0 +1,119 @@
+{% extends "layout.html" %}
+
+{% block title %}Run {{ run.id }} · AutoThesis.finance{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h1>{{ run.ticker }}</h1>
+  <div class="meta-grid">
+    <div><strong>Status:</strong> <span id="run-status" class="badge badge-{{ run.status }}">{{ run.status }}</span></div>
+    <div><strong>Created:</strong> {{ run.created_at }}</div>
+    <div><strong>Question:</strong> {{ run.question }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Progress</h2>
+  <ul id="event-list" class="timeline">
+    {% for event in events %}
+      <li>
+        <strong>{{ event.created_at }}</strong>
+        <span class="badge badge-event">{{ event.event_type }}</span>
+        <div>{{ event.message }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Iterations</h2>
+  <div id="iteration-list" class="iteration-list">
+    {% for iteration in iterations %}
+      <a class="iteration-card" href="/runs/{{ run.id }}/iterations/{{ iteration.iteration_number }}">
+        <div>
+          <strong>Iteration {{ iteration.iteration_number }}</strong>
+          <span class="badge badge-{{ iteration.status }}">{{ iteration.status }}</span>
+        </div>
+        {% if iteration.evaluation_score.is_some() %}
+          <p>Score: {{ iteration.evaluation_score.unwrap() }}</p>
+        {% endif %}
+      </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel" id="final-memo-panel">
+  <h2>Final memo</h2>
+  {% if final_memo_html.is_some() %}
+    <div id="final-memo" class="memo-body">{{ final_memo_html.as_ref().unwrap()|safe }}</div>
+  {% else %}
+    <p id="final-memo-placeholder">Research in progress.</p>
+    <div id="final-memo" class="memo-body hidden"></div>
+  {% endif %}
+</section>
+
+<script>
+  const runId = '{{ run.id }}';
+  const eventList = document.getElementById('event-list');
+  const iterationList = document.getElementById('iteration-list');
+  const statusEl = document.getElementById('run-status');
+  const finalMemoEl = document.getElementById('final-memo');
+  const finalMemoPlaceholder = document.getElementById('final-memo-placeholder');
+
+  function renderEvents(events) {
+    eventList.innerHTML = events.map((event) => `
+      <li>
+        <strong>${event.created_at}</strong>
+        <span class="badge badge-event">${event.event_type}</span>
+        <div>${event.message}</div>
+      </li>
+    `).join('');
+  }
+
+  function renderIterations(iterations) {
+    iterationList.innerHTML = iterations.map((iteration) => `
+      <a class="iteration-card" href="/runs/${runId}/iterations/${iteration.iteration_number}">
+        <div>
+          <strong>Iteration ${iteration.iteration_number}</strong>
+          <span class="badge badge-${iteration.status}">${iteration.status}</span>
+        </div>
+        ${iteration.evaluation_score !== null ? `<p>Score: ${iteration.evaluation_score.toFixed(1)}</p>` : ''}
+      </a>
+    `).join('');
+  }
+
+  async function poll() {
+    const [runRes, eventsRes, iterationsRes, finalRes] = await Promise.all([
+      fetch(`/api/runs/${runId}`),
+      fetch(`/api/runs/${runId}/events`),
+      fetch(`/api/runs/${runId}/iterations`),
+      fetch(`/api/runs/${runId}/final`)
+    ]);
+
+    if (!runRes.ok) return;
+
+    const run = await runRes.json();
+    const events = await eventsRes.json();
+    const iterations = await iterationsRes.json();
+    const finalMemo = finalRes.ok ? await finalRes.json() : null;
+
+    statusEl.textContent = run.status;
+    statusEl.className = `badge badge-${run.status}`;
+    renderEvents(events);
+    renderIterations(iterations);
+
+    if (finalMemo && finalMemo.final_memo_html) {
+      finalMemoEl.innerHTML = finalMemo.final_memo_html;
+      finalMemoEl.classList.remove('hidden');
+      if (finalMemoPlaceholder) finalMemoPlaceholder.classList.add('hidden');
+    }
+
+    if (run.status === 'completed' || run.status === 'failed') {
+      clearInterval(window.runPoller);
+    }
+  }
+
+  window.runPoller = setInterval(poll, 2000);
+  poll();
+</script>
+{% endblock %}

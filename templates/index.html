@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block title %}AutoThesis.finance{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <h1>Research a stock with a closed-loop memo engine</h1>
+  <p>
+    AutoThesis searches the web, extracts evidence, writes a memo, critiques itself, and repeats the process over multiple iterations.
+  </p>
+  <form id="research-form" class="form-grid">
+    <label>
+      <span>Ticker</span>
+      <input type="text" name="ticker" value="NVDA" maxlength="12" required />
+    </label>
+    <label>
+      <span>Question</span>
+      <textarea name="question" rows="4" placeholder="Optional custom question">What is the current bull and bear case for NVDA, and what would need to be true for the valuation to make sense?</textarea>
+    </label>
+    <button type="submit">Start Research</button>
+  </form>
+  <p id="form-error" class="error-text hidden"></p>
+</section>
+
+<section class="panel">
+  <h2>Recent runs</h2>
+  {% if runs.len() == 0 %}
+    <p>No runs yet.</p>
+  {% else %}
+    <div class="run-list">
+      {% for run in runs %}
+        <a class="run-card" href="/runs/{{ run.id }}">
+          <div>
+            <strong>{{ run.ticker }}</strong>
+            <span class="badge badge-{{ run.status }}">{{ run.status }}</span>
+          </div>
+          <p>{{ run.question }}</p>
+          <small>{{ run.created_at }}</small>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<script>
+  const form = document.getElementById('research-form');
+  const errorEl = document.getElementById('form-error');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    errorEl.classList.add('hidden');
+    const formData = new FormData(form);
+    const payload = {
+      ticker: formData.get('ticker'),
+      question: formData.get('question')
+    };
+
+    const response = await fetch('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to create run' }));
+      errorEl.textContent = body.error || 'Failed to create run';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const body = await response.json();
+    window.location.href = `/runs/${body.run_id}`;
+  });
+</script>
+{% endblock %}
