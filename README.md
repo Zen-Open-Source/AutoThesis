@@ -1,70 +1,93 @@
 # AutoThesis.finance
 
-AutoThesis is a Rust-first local web app that runs an iterative research loop for public equities. Enter a ticker, let the system search, extract evidence, critique its own memo, and publish a final investment memo with inspectable iterations and sources.
+AutoThesis.finance is a local Rust web app for iterative stock research. Enter a ticker, start a run, and the app will search, extract evidence, critique its own memo, and publish a final research memo with sources and iteration history.
 
-## What is implemented
-
-- Rust `axum` web app with server-rendered HTML via `askama`
-- SQLite persistence with SQL migrations
-- Iterative research loop with planner, search, reader, synthesizer, critic, and evaluator stages
-- OpenAI-backed LLM provider and Tavily-backed search provider
-- Source fetching and text extraction via `reqwest` and `scraper`
-- Inspectable runs, events, iterations, sources, evidence notes, and final memos
-- Tests for DB persistence, API endpoints, and an end-to-end mocked happy path
-
-## What is not implemented
-
-- Brokerage or trading integrations
-- Authentication, billing, or multi-user accounts
-- Backtesting or portfolio optimization
-- Advanced SEC parsing beyond normal web retrieval
-
-## Prerequisites
+## Requirements
 
 - Rust stable (`cargo`, `rustc`)
 - An OpenAI API key
-- A search API key for Tavily
+- A Tavily API key
 
-## Environment setup
+## Setup
 
-1. Copy `.env.example` to `.env`.
-2. Fill in:
-   - `OPENAI_API_KEY`
-   - `SEARCH_API_KEY`
-3. Optionally adjust `MAX_ITERATIONS`, `MAX_SOURCES_PER_ITERATION`, or the model name.
+1. Copy the example environment file:
 
-## Local run
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Add your API keys to `.env`:
+
+   ```bash
+   OPENAI_API_KEY=...
+   SEARCH_API_KEY=...
+   ```
+
+3. Optionally adjust:
+   - `OPENAI_MODEL`
+   - `MAX_ITERATIONS`
+   - `MAX_SOURCES_PER_ITERATION`
+   - `APP_HOST`
+   - `APP_PORT`
+
+## Run locally
+
+Start the app with:
 
 ```bash
 cargo run
 ```
 
-Then open `http://127.0.0.1:3000`.
+Then open:
 
-## Migrations
-
-Migrations are applied automatically on startup from `sql/migrations`.
-
-## Test commands
-
-```bash
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --check
+```text
+http://127.0.0.1:3000
 ```
 
-## Sample tickers and questions
+Database migrations are applied automatically on startup.
 
-- `NVDA` — What is the current bull and bear case for NVDA, and what would need to be true for the valuation to make sense?
-- `AMZN` — What are the most important risks and catalysts for AMZN over the next 12 to 24 months?
-- `COST` — What is the current bull and bear case for COST?
+## How to use
 
-## Architecture overview
+1. Open the homepage.
+2. Enter a stock ticker such as `NVDA`, `AMZN`, `TSLA`, or `COST`.
+3. Optionally customize the research question.
+4. Click **Start Research**.
+5. Watch the run progress through multiple iterations.
+6. Open the completed memo and inspect:
+   - executive summary
+   - bull case
+   - bear case
+   - risks
+   - known unknowns
+   - sources
+   - iteration history
 
-- `src/routes`: JSON API and server-rendered pages
-- `src/services`: planner/search/reader/synthesizer/critic/evaluator/orchestrator
-- `src/providers`: OpenAI, Tavily, and page fetching integrations
-- `src/db.rs`: persistence layer and query helpers
-- `templates/`: Askama HTML templates
-- `sql/migrations/`: SQLite schema
-- `prompts/`: versioned prompt files used by the agent loop
+## Example questions
+
+- What is the current bull and bear case for `NVDA`?
+- What would need to be true for the current valuation of `AMZN` to make sense?
+- What are the most important risks and catalysts for `COST` over the next 12 to 24 months?
+
+## Environment variables
+
+See `.env.example` for the full list. The main ones are:
+
+- `APP_HOST`
+- `APP_PORT`
+- `DATABASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_BASE_URL`
+- `SEARCH_API_KEY`
+- `SEARCH_PROVIDER`
+- `MAX_ITERATIONS`
+- `MAX_SOURCES_PER_ITERATION`
+- `RUST_LOG`
+
+## Development checks
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
