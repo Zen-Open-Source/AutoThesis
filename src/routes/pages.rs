@@ -3,8 +3,8 @@ use crate::{
     error::{AppError, AppResult},
     markdown::render_markdown,
     models::{
-        EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run, SearchQueryRecord,
-        SourceRecord,
+        ComparisonDetail, ComparisonRunWithDetails, EvaluatorOutput, EventRecord, Iteration,
+        IterationSummary, Run, SearchQueryRecord, SourceRecord,
     },
 };
 use askama::Template;
@@ -136,6 +136,73 @@ pub async fn iteration_detail(
         draft_html: render_markdown(detail.iteration.draft_markdown.as_deref().unwrap_or("")),
         critique_html: render_markdown(detail.iteration.critique_markdown.as_deref().unwrap_or("")),
         evaluation,
+    }
+    .render()
+    .map_err(|error| AppError::Internal(error.into()))?;
+    Ok(Html(html))
+}
+
+// Comparison templates
+#[derive(Template)]
+#[template(path = "comparisons.html")]
+struct ComparisonsTemplate {
+    comparisons: Vec<crate::models::Comparison>,
+}
+
+#[derive(Clone)]
+struct ComparisonRunView {
+    ticker: String,
+    status: String,
+    final_memo_html: Option<String>,
+    summary: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "comparison.html")]
+struct ComparisonTemplate {
+    comparison: crate::models::Comparison,
+    comparison_runs: Vec<ComparisonRunView>,
+}
+
+pub async fn comparisons_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let comparisons = state.db.list_comparisons(25).await.map_err(AppError::from)?;
+    Ok(Html(
+        ComparisonsTemplate { comparisons }
+            .render()
+            .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
+pub async fn comparison_detail(
+    Path(comparison_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Html<String>> {
+    let comparison = state
+        .db
+        .get_comparison(&comparison_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+
+    let comparison_runs = state
+        .db
+        .list_comparison_runs(&comparison_id)
+        .await
+        .map_err(AppError::from)?;
+
+    let run_views: Vec<ComparisonRunView> = comparison_runs
+        .into_iter()
+        .map(|cr| ComparisonRunView {
+            ticker: cr.ticker,
+            status: cr.run.as_ref().map(|r| r.status.clone()).unwrap_or_else(|| "pending".to_string()),
+            final_memo_html: cr.run.as_ref().and_then(|r| r.final_memo_html.clone()),
+            summary: cr.run.as_ref().and_then(|r| r.summary.clone()),
+        })
+        .collect();
+
+    let html = ComparisonTemplate {
+        comparison,
+        comparison_runs: run_views,
     }
     .render()
     .map_err(|error| AppError::Internal(error.into()))?;

@@ -1,6 +1,6 @@
 use crate::models::{
-    EventRecord, EvidenceNoteRecord, Iteration, IterationDetail, Run, SearchQueryRecord,
-    SearchResultRecord, SourceRecord,
+    Comparison, ComparisonRun, ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord,
+    Iteration, IterationDetail, Run, SearchQueryRecord, SearchResultRecord, SourceRecord,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -700,4 +700,191 @@ fn collect_rows<T>(
         items.push(row?);
     }
     Ok(items)
+}
+
+// Comparison methods
+impl Database {
+    pub async fn create_comparison(&self, name: &str, question: &str) -> Result<Comparison> {
+        let comparison = Comparison {
+            id: Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            question: question.to_string(),
+            status: "building".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            final_comparison_html: None,
+            summary: None,
+        };
+
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO comparisons (id, name, question, status, created_at, updated_at, final_comparison_html, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                comparison.id,
+                comparison.name,
+                comparison.question,
+                comparison.status,
+                encode_time(comparison.created_at),
+                encode_time(comparison.updated_at),
+                comparison.final_comparison_html,
+                comparison.summary,
+            ],
+        )?;
+
+        self.get_comparison(&comparison.id)
+            .await?
+            .context("created comparison missing after insert")
+    }
+
+    pub async fn get_comparison(&self, comparison_id: &str) -> Result<Option<Comparison>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM comparisons WHERE id = ?1",
+            [comparison_id],
+            map_comparison,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_comparisons(&self, limit: i64) -> Result<Vec<Comparison>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare("SELECT * FROM comparisons ORDER BY created_at DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_comparison)?;
+        collect_rows(rows)
+    }
+
+    pub async fn add_run_to_comparison(
+        &self,
+        comparison_id: &str,
+        run_id: &str,
+        ticker: &str,
+        sort_order: i64,
+    ) -> Result<ComparisonRun> {
+        let comparison_run = ComparisonRun {
+            id: Uuid::new_v4().to_string(),
+            comparison_id: comparison_id.to_string(),
+            run_id: run_id.to_string(),
+            ticker: ticker.to_string(),
+            sort_order,
+            created_at: Utc::now(),
+        };
+
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO comparison_runs (id, comparison_id, run_id, ticker, sort_order, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                comparison_run.id,
+                comparison_run.comparison_id,
+                comparison_run.run_id,
+                comparison_run.ticker,
+                comparison_run.sort_order,
+                encode_time(comparison_run.created_at),
+            ],
+        )?;
+
+        Ok(comparison_run)
+    }
+
+    pub async fn list_comparison_runs(&self, comparison_id: &str) -> Result<Vec<ComparisonRunWithDetails>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT cr.*, r.* FROM comparison_runs cr
+             LEFT JOIN runs r ON cr.run_id = r.id
+             WHERE cr.comparison_id = ?1
+             ORDER BY cr.sort_order ASC, cr.created_at ASC"
+        )?;
+        
+        let rows = statement.query_map([comparison_id], |row| {
+            let comparison_run = ComparisonRun {
+                id: row.get("cr.id")?,
+                comparison_id: row.get("cr.comparison_id")?,
+                run_id: row.get("cr.run_id")?,
+                ticker: row.get("cr.ticker")?,
+                sort_order: row.get("cr.sort_order")?,
+                created_at: parse_time(row.get("cr.created_at")?)?,
+            };
+            
+            // Check if run exists by checking id column
+            let run_id: Option<String> = row.get("r.id")?;
+            let run = run_id.map(|_| {
+                Ok(Run {
+                    id: row.get("r.id")?,
+                    ticker: row.get("r.ticker")?,
+                    question: row.get("r.question")?,
+                    status: row.get("r.status")?,
+                    created_at: parse_time(row.get("r.created_at")?)?,
+                    updated_at: parse_time(row.get("r.updated_at")?)?,
+                    final_iteration_number: row.get("r.final_iteration_number")?,
+                    final_memo_markdown: row.get("r.final_memo_markdown")?,
+                    final_memo_html: row.get("r.final_memo_html")?,
+                    summary: row.get("r.summary")?,
+                })
+            }).transpose()?;
+            
+            Ok(ComparisonRunWithDetails {
+                id: comparison_run.id,
+                comparison_id: comparison_run.comparison_id,
+                run_id: comparison_run.run_id,
+                ticker: comparison_run.ticker,
+                sort_order: comparison_run.sort_order,
+                created_at: comparison_run.created_at,
+                run,
+            })
+        })?;
+        
+        collect_rows(rows)
+    }
+
+    pub async fn update_comparison_status(&self, comparison_id: &str, status: &str) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute(
+            "UPDATE comparisons SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, encode_time(Utc::now()), comparison_id],
+        )?;
+        Ok(())
+    }
+
+    pub async fn finalize_comparison(
+        &self,
+        comparison_id: &str,
+        final_comparison_html: &str,
+        summary: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute(
+            "UPDATE comparisons
+             SET status = ?1, updated_at = ?2, final_comparison_html = ?3, summary = ?4
+             WHERE id = ?5",
+            params![
+                "completed",
+                encode_time(Utc::now()),
+                final_comparison_html,
+                summary,
+                comparison_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn delete_comparison(&self, comparison_id: &str) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute("DELETE FROM comparisons WHERE id = ?1", [comparison_id])?;
+        Ok(())
+    }
+}
+
+fn map_comparison(row: &Row<'_>) -> rusqlite::Result<Comparison> {
+    Ok(Comparison {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        question: row.get("question")?,
+        status: row.get("status")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+        final_comparison_html: row.get("final_comparison_html")?,
+        summary: row.get("summary")?,
+    })
 }
