@@ -48,7 +48,9 @@ http://127.0.0.1:3000
 
 Database migrations are applied automatically on startup.
 
-## How to use
+## Features
+
+### Single Stock Research
 
 1. Open the homepage.
 2. Enter a stock ticker such as `NVDA`, `AMZN`, `TSLA`, or `COST`.
@@ -63,6 +65,25 @@ Database migrations are applied automatically on startup.
    - known unknowns
    - sources
    - iteration history
+
+### Multi-Ticker Comparison
+
+Compare multiple stocks side-by-side:
+
+1. Navigate to the **Comparisons** page.
+2. Enter a comparison name and select multiple tickers (e.g., `NVDA`, `AMD`, `INTC`).
+3. Optionally customize the comparison question.
+4. Click **Create Comparison**.
+5. Watch each ticker run its own research iteration.
+6. View the completed comparison with side-by-side memos.
+
+### Dark Mode
+
+AutoThesis supports both light and dark themes:
+
+- The app defaults to your system preference (`prefers-color-scheme`).
+- Click the sun/moon icon in the header to manually toggle themes.
+- Your preference is saved in browser localStorage and persists across sessions.
 
 ## Example questions
 
