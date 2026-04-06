@@ -101,6 +101,58 @@ pub struct CreateRunResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comparison {
+    pub id: String,
+    pub name: String,
+    pub question: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub final_comparison_html: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonRun {
+    pub id: String,
+    pub comparison_id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonRunWithDetails {
+    pub id: String,
+    pub comparison_id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+    pub run: Option<Run>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateComparisonRequest {
+    pub name: String,
+    pub tickers: Vec<String>,
+    pub question: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateComparisonResponse {
+    pub comparison_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonDetail {
+    pub comparison: Comparison,
+    pub comparison_runs: Vec<ComparisonRunWithDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalMemoResponse {
     pub run_id: String,
     pub status: String,
@@ -192,5 +244,3 @@ pub struct EvaluatorOutput {
 pub struct JsonEnvelope {
     pub value: Value,
 }
-
-

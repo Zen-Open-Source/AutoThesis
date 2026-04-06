@@ -5,7 +5,7 @@ pub mod runs;
 
 use crate::app_state::AppState;
 use axum::{
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -30,8 +30,14 @@ pub fn router(state: AppState) -> Router {
             get(runs::get_iteration),
         )
         .route("/api/runs/:id/final", get(runs::get_final))
-        .route("/api/comparisons", post(comparisons::create_comparison).get(comparisons::list_comparisons))
-        .route("/api/comparisons/:id", get(comparisons::get_comparison).delete(comparisons::delete_comparison))
+        .route(
+            "/api/comparisons",
+            post(comparisons::create_comparison).get(comparisons::list_comparisons),
+        )
+        .route(
+            "/api/comparisons/:id",
+            get(comparisons::get_comparison).delete(comparisons::delete_comparison),
+        )
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

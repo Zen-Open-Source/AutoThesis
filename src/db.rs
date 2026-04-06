@@ -750,7 +750,8 @@ impl Database {
 
     pub async fn list_comparisons(&self, limit: i64) -> Result<Vec<Comparison>> {
         let conn = self.open_connection()?;
-        let mut statement = conn.prepare("SELECT * FROM comparisons ORDER BY created_at DESC LIMIT ?1")?;
+        let mut statement =
+            conn.prepare("SELECT * FROM comparisons ORDER BY created_at DESC LIMIT ?1")?;
         let rows = statement.query_map([limit], map_comparison)?;
         collect_rows(rows)
     }
@@ -788,42 +789,63 @@ impl Database {
         Ok(comparison_run)
     }
 
-    pub async fn list_comparison_runs(&self, comparison_id: &str) -> Result<Vec<ComparisonRunWithDetails>> {
+    pub async fn list_comparison_runs(
+        &self,
+        comparison_id: &str,
+    ) -> Result<Vec<ComparisonRunWithDetails>> {
         let conn = self.open_connection()?;
         let mut statement = conn.prepare(
-            "SELECT cr.*, r.* FROM comparison_runs cr
+            "SELECT
+                cr.id AS cr_id,
+                cr.comparison_id AS cr_comparison_id,
+                cr.run_id AS cr_run_id,
+                cr.ticker AS cr_ticker,
+                cr.sort_order AS cr_sort_order,
+                cr.created_at AS cr_created_at,
+                r.id AS run_id,
+                r.ticker AS run_ticker,
+                r.question AS run_question,
+                r.status AS run_status,
+                r.created_at AS run_created_at,
+                r.updated_at AS run_updated_at,
+                r.final_iteration_number AS run_final_iteration_number,
+                r.final_memo_markdown AS run_final_memo_markdown,
+                r.final_memo_html AS run_final_memo_html,
+                r.summary AS run_summary
+             FROM comparison_runs cr
              LEFT JOIN runs r ON cr.run_id = r.id
              WHERE cr.comparison_id = ?1
-             ORDER BY cr.sort_order ASC, cr.created_at ASC"
+             ORDER BY cr.sort_order ASC, cr.created_at ASC",
         )?;
-        
+
         let rows = statement.query_map([comparison_id], |row| {
             let comparison_run = ComparisonRun {
-                id: row.get("cr.id")?,
-                comparison_id: row.get("cr.comparison_id")?,
-                run_id: row.get("cr.run_id")?,
-                ticker: row.get("cr.ticker")?,
-                sort_order: row.get("cr.sort_order")?,
-                created_at: parse_time(row.get("cr.created_at")?)?,
+                id: row.get("cr_id")?,
+                comparison_id: row.get("cr_comparison_id")?,
+                run_id: row.get("cr_run_id")?,
+                ticker: row.get("cr_ticker")?,
+                sort_order: row.get("cr_sort_order")?,
+                created_at: parse_time(row.get("cr_created_at")?)?,
             };
-            
-            // Check if run exists by checking id column
-            let run_id: Option<String> = row.get("r.id")?;
-            let run = run_id.map(|_| {
-                Ok(Run {
-                    id: row.get("r.id")?,
-                    ticker: row.get("r.ticker")?,
-                    question: row.get("r.question")?,
-                    status: row.get("r.status")?,
-                    created_at: parse_time(row.get("r.created_at")?)?,
-                    updated_at: parse_time(row.get("r.updated_at")?)?,
-                    final_iteration_number: row.get("r.final_iteration_number")?,
-                    final_memo_markdown: row.get("r.final_memo_markdown")?,
-                    final_memo_html: row.get("r.final_memo_html")?,
-                    summary: row.get("r.summary")?,
+
+            let run_id: Option<String> = row.get("run_id")?;
+            let run = if run_id.is_some() {
+                Some(Run {
+                    id: row.get("run_id")?,
+                    ticker: row.get("run_ticker")?,
+                    question: row.get("run_question")?,
+                    status: row.get("run_status")?,
+                    created_at: parse_time(row.get("run_created_at")?)?,
+                    updated_at: parse_time(row.get("run_updated_at")?)?,
+                    final_iteration_number: row.get("run_final_iteration_number")?,
+                    final_memo_markdown: row.get("run_final_memo_markdown")?,
+                    final_memo_html: row.get("run_final_memo_html")?,
+                    summary: row.get("run_summary")?,
                 })
-            }).transpose()?;
-            
+            } else {
+                None
+            };
+
             Ok(ComparisonRunWithDetails {
                 id: comparison_run.id,
                 comparison_id: comparison_run.comparison_id,
@@ -834,7 +856,7 @@ impl Database {
                 run,
             })
         })?;
-        
+
         collect_rows(rows)
     }
 

@@ -22,13 +22,15 @@ pub async fn create_comparison(
         .collect::<Result<Vec<_>, _>>()?;
 
     if tickers.is_empty() {
-        return Err(AppError::BadRequest("at least one ticker is required".to_string()));
+        return Err(AppError::BadRequest(
+            "at least one ticker is required".to_string(),
+        ));
     }
 
     // Use default question if not provided
-    let question = payload
-        .question
-        .unwrap_or_else(|| "Compare these stocks across valuation, growth, and risk factors".to_string());
+    let question = payload.question.unwrap_or_else(|| {
+        "Compare these stocks across valuation, growth, and risk factors".to_string()
+    });
 
     // Create the comparison record
     let comparison = state
@@ -45,7 +47,7 @@ pub async fn create_comparison(
             .create_run(ticker, &ticker_question)
             .await
             .map_err(AppError::from)?;
-        
+
         state
             .db
             .add_run_to_comparison(&comparison.id, &run.id, ticker, idx as i64)
@@ -77,8 +79,12 @@ pub async fn create_comparison(
 
 pub async fn list_comparisons(
     State(state): State<AppState>,
-) -> AppResult<AxumJson<Vec<crate::models::Comparison>>> {
-    let comparisons = state.db.list_comparisons(25).await.map_err(AppError::from)?;
+) -> AppResult<AxumJson<Vec<Comparison>>> {
+    let comparisons = state
+        .db
+        .list_comparisons(25)
+        .await
+        .map_err(AppError::from)?;
     Ok(AxumJson(comparisons))
 }
 

@@ -3,8 +3,8 @@ use crate::{
     error::{AppError, AppResult},
     markdown::render_markdown,
     models::{
-        ComparisonDetail, ComparisonRunWithDetails, EvaluatorOutput, EventRecord, Iteration,
-        IterationSummary, Run, SearchQueryRecord, SourceRecord,
+        EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run, SearchQueryRecord,
+        SourceRecord,
     },
 };
 use askama::Template;
@@ -153,8 +153,10 @@ struct ComparisonsTemplate {
 struct ComparisonRunView {
     ticker: String,
     status: String,
-    final_memo_html: Option<String>,
-    summary: Option<String>,
+    has_final_memo: bool,
+    final_memo_html: String,
+    has_summary: bool,
+    summary: String,
 }
 
 #[derive(Template)]
@@ -162,10 +164,15 @@ struct ComparisonRunView {
 struct ComparisonTemplate {
     comparison: crate::models::Comparison,
     comparison_runs: Vec<ComparisonRunView>,
+    has_pending_runs: bool,
 }
 
 pub async fn comparisons_index(State(state): State<AppState>) -> AppResult<Html<String>> {
-    let comparisons = state.db.list_comparisons(25).await.map_err(AppError::from)?;
+    let comparisons = state
+        .db
+        .list_comparisons(25)
+        .await
+        .map_err(AppError::from)?;
     Ok(Html(
         ComparisonsTemplate { comparisons }
             .render()
@@ -192,17 +199,39 @@ pub async fn comparison_detail(
 
     let run_views: Vec<ComparisonRunView> = comparison_runs
         .into_iter()
-        .map(|cr| ComparisonRunView {
-            ticker: cr.ticker,
-            status: cr.run.as_ref().map(|r| r.status.clone()).unwrap_or_else(|| "pending".to_string()),
-            final_memo_html: cr.run.as_ref().and_then(|r| r.final_memo_html.clone()),
-            summary: cr.run.as_ref().and_then(|r| r.summary.clone()),
+        .map(|cr| {
+            let final_memo_html = cr
+                .run
+                .as_ref()
+                .and_then(|r| r.final_memo_html.clone())
+                .unwrap_or_default();
+            let summary = cr
+                .run
+                .as_ref()
+                .and_then(|r| r.summary.clone())
+                .unwrap_or_default();
+            ComparisonRunView {
+                ticker: cr.ticker,
+                status: cr
+                    .run
+                    .as_ref()
+                    .map(|r| r.status.clone())
+                    .unwrap_or_else(|| "pending".to_string()),
+                has_final_memo: !final_memo_html.is_empty(),
+                final_memo_html,
+                has_summary: !summary.is_empty(),
+                summary,
+            }
         })
         .collect();
+    let has_pending_runs = run_views
+        .iter()
+        .any(|run| run.status != "completed" && run.status != "failed");
 
     let html = ComparisonTemplate {
         comparison,
         comparison_runs: run_views,
+        has_pending_runs,
     }
     .render()
     .map_err(|error| AppError::Internal(error.into()))?;
