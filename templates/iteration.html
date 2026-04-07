@@ -34,6 +34,38 @@
         <h3><a href="{{ source.url }}">{{ source.title.as_deref().unwrap_or(source.url.as_str()) }}</a></h3>
         <p>{{ source.source_type.as_deref().unwrap_or("unknown") }} · {{ source.domain.as_deref().unwrap_or("n/a") }}</p>
         {% if source.excerpt.is_some() %}<p>{{ source.excerpt.as_ref().unwrap() }}</p>{% endif %}
+        <div class="source-actions">
+          <button
+            type="button"
+            class="secondary-button compact-button bookmark-button"
+            data-entity-type="source"
+            data-entity-id="{{ source.id }}"
+            data-title="{{ source.title.as_deref().unwrap_or(source.url.as_str()) }}"
+            data-target-path="{{ source.url }}"
+          >
+            Bookmark source
+          </button>
+        </div>
+
+        <div class="annotation-panel">
+          <h4>Source annotations</h4>
+          <ul id="annotation-list-{{ source.id }}" class="annotation-list"></ul>
+          <form class="annotation-form" data-source-id="{{ source.id }}">
+            <label>
+              <span>Selected text</span>
+              <input type="text" name="selected_text" maxlength="500" required />
+            </label>
+            <label>
+              <span>Annotation</span>
+              <textarea name="annotation_markdown" rows="3" required></textarea>
+            </label>
+            <label>
+              <span>Tag</span>
+              <input type="text" name="tag" maxlength="64" placeholder="valuation / risk / catalyst" />
+            </label>
+            <button type="submit" class="compact-button">Add annotation</button>
+          </form>
+        </div>
       </article>
     {% endfor %}
   </div>
@@ -72,4 +104,88 @@
     <p>No evaluation recorded.</p>
   {% endif %}
 </section>
+
+<script>
+  const runId = '{{ run.id }}';
+
+  function escapeHtml(value) {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  async function saveBookmark(button) {
+    const payload = {
+      entity_type: button.dataset.entityType,
+      entity_id: button.dataset.entityId,
+      title: button.dataset.title,
+      target_path: button.dataset.targetPath,
+      note: null
+    };
+    const response = await fetch('/api/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      alert('Failed to bookmark source');
+      return;
+    }
+    button.textContent = 'Bookmarked';
+  }
+
+  async function loadAnnotations(sourceId) {
+    const listEl = document.getElementById(`annotation-list-${sourceId}`);
+    const response = await fetch(`/api/sources/${sourceId}/annotations`);
+    if (!response.ok) {
+      listEl.innerHTML = '<li>Failed to load annotations.</li>';
+      return;
+    }
+    const annotations = await response.json();
+    if (annotations.length === 0) {
+      listEl.innerHTML = '<li>No annotations yet.</li>';
+      return;
+    }
+    listEl.innerHTML = annotations.map((annotation) => `
+      <li class="note-card">
+        <div><strong>${escapeHtml(annotation.tag || 'note')}</strong> · ${escapeHtml(annotation.created_at)}</div>
+        <blockquote>${escapeHtml(annotation.selected_text)}</blockquote>
+        <div>${escapeHtml(annotation.annotation_markdown)}</div>
+      </li>
+    `).join('');
+  }
+
+  document.querySelectorAll('.bookmark-button').forEach((button) => {
+    button.addEventListener('click', () => saveBookmark(button));
+  });
+
+  document.querySelectorAll('.annotation-form').forEach((form) => {
+    const sourceId = form.dataset.sourceId;
+    loadAnnotations(sourceId);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const payload = {
+        run_id: runId,
+        selected_text: formData.get('selected_text'),
+        annotation_markdown: formData.get('annotation_markdown'),
+        tag: formData.get('tag') || null
+      };
+      const response = await fetch(`/api/sources/${sourceId}/annotations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        alert('Failed to save annotation');
+        return;
+      }
+      form.reset();
+      loadAnnotations(sourceId);
+    });
+  });
+</script>
 {% endblock %}

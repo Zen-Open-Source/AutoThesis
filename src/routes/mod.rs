@@ -1,3 +1,4 @@
+pub mod bookmarks;
 pub mod comparisons;
 pub mod health;
 pub mod pages;
@@ -20,6 +21,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/comparisons", get(pages::comparisons_index))
         .route("/comparisons/:id", get(pages::comparison_detail))
+        .route("/bookmarks", get(pages::bookmarks_index))
         .route("/healthz", get(health::healthz))
         .route("/api/runs", post(runs::create_run).get(runs::list_runs))
         .route("/api/runs/:id", get(runs::get_run))
@@ -37,6 +39,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/comparisons/:id",
             get(comparisons::get_comparison).delete(comparisons::delete_comparison),
+        )
+        .route(
+            "/api/bookmarks",
+            get(bookmarks::list_bookmarks)
+                .post(bookmarks::upsert_bookmark)
+                .delete(bookmarks::delete_bookmark),
+        )
+        .route(
+            "/api/sources/:source_id/annotations",
+            get(bookmarks::list_source_annotations)
+                .post(bookmarks::create_source_annotation)
+                .delete(bookmarks::delete_source_annotation),
         )
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())

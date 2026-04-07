@@ -8,34 +8,50 @@ use axum::{
     extract::{Path, State},
     response::Json as AxumJson,
 };
+use std::collections::HashSet;
 use tracing::error;
 
 pub async fn create_comparison(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<CreateComparisonRequest>,
 ) -> AppResult<AxumJson<CreateComparisonResponse>> {
-    // Normalize tickers
-    let tickers: Vec<String> = payload
+    let comparison_name = payload.name.trim();
+    if comparison_name.is_empty() {
+        return Err(AppError::BadRequest(
+            "comparison name is required".to_string(),
+        ));
+    }
+
+    let normalized_tickers: Vec<String> = payload
         .tickers
         .iter()
         .map(|t| normalize_ticker(t))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = HashSet::new();
+    let tickers: Vec<String> = normalized_tickers
+        .into_iter()
+        .filter(|ticker| seen.insert(ticker.clone()))
+        .collect();
 
-    if tickers.is_empty() {
+    if tickers.len() < 2 {
         return Err(AppError::BadRequest(
-            "at least one ticker is required".to_string(),
+            "at least two unique tickers are required".to_string(),
         ));
     }
 
     // Use default question if not provided
-    let question = payload.question.unwrap_or_else(|| {
-        "Compare these stocks across valuation, growth, and risk factors".to_string()
-    });
+    let question = payload
+        .question
+        .map(|question| question.trim().to_string())
+        .filter(|question| !question.is_empty())
+        .unwrap_or_else(|| {
+            "Compare these stocks across valuation, growth, and risk factors".to_string()
+        });
 
     // Create the comparison record
     let comparison = state
         .db
-        .create_comparison(&payload.name, &question)
+        .create_comparison(comparison_name, &question)
         .await
         .map_err(AppError::from)?;
 

@@ -201,6 +201,212 @@ async fn source_fetch_failure_is_recorded_and_run_still_completes() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn comparison_endpoint_updates_terminal_status_and_rollup() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/comparisons")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "MegaCap Pair",
+                    "tickers": ["AAPL", "MSFT"],
+                    "question": "Compare growth and valuation"
+                }))?))?,
+        )
+        .await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await?.to_bytes();
+    let payload: Value = serde_json::from_slice(&body)?;
+    let comparison_id = payload["comparison_id"].as_str().expect("comparison id");
+
+    let comparison = wait_for_comparison_terminal(&ctx.state, comparison_id).await?;
+    assert_eq!(comparison.status, "completed");
+    assert!(comparison.summary.is_some());
+    assert!(comparison.final_comparison_html.is_some());
+
+    let detail_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/comparisons/{comparison_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_body = detail_response.into_body().collect().await?.to_bytes();
+    let detail_payload: Value = serde_json::from_slice(&detail_body)?;
+    assert_eq!(
+        detail_payload["comparison_runs"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bookmarks_and_source_annotations_endpoints_work() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let run = ctx
+        .state
+        .db
+        .create_run("NVDA", "Bookmark and annotation test")
+        .await?;
+    let iteration = ctx.state.db.create_iteration(&run.id, 1).await?;
+    let source = ctx
+        .state
+        .db
+        .insert_source(
+            &run.id,
+            Some(&iteration.id),
+            "https://example.com/nvda",
+            Some("NVDA source"),
+            Some("example.com"),
+            Some("Test excerpt"),
+            Some(9.0),
+            Some("news"),
+        )
+        .await?;
+    let run_id = run.id.clone();
+    let source_id = source.id.clone();
+
+    let create_bookmark_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/bookmarks")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "entity_type": "run",
+                    "entity_id": run_id,
+                    "title": "NVDA run",
+                    "note": "important",
+                    "target_path": format!("/runs/{}", run.id)
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_bookmark_response.status(), StatusCode::OK);
+
+    let list_bookmarks_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/bookmarks")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(list_bookmarks_response.status(), StatusCode::OK);
+    let list_bookmarks_body = list_bookmarks_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let bookmarks_payload: Value = serde_json::from_slice(&list_bookmarks_body)?;
+    assert_eq!(
+        bookmarks_payload
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        1
+    );
+
+    let create_annotation_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sources/{source_id}/annotations"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "run_id": run.id.clone(),
+                    "selected_text": "Revenue accelerated 28%",
+                    "annotation_markdown": "Strong acceleration heading into Q2",
+                    "tag": "growth"
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_annotation_response.status(), StatusCode::OK);
+    let create_annotation_body = create_annotation_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let annotation_payload: Value = serde_json::from_slice(&create_annotation_body)?;
+    let annotation_id = annotation_payload["id"].as_str().expect("annotation id");
+
+    let list_annotations_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/sources/{source_id}/annotations"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(list_annotations_response.status(), StatusCode::OK);
+    let list_annotations_body = list_annotations_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let annotations_payload: Value = serde_json::from_slice(&list_annotations_body)?;
+    assert_eq!(
+        annotations_payload
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        1
+    );
+
+    let delete_annotation_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/sources/{}/annotations?annotation_id={}",
+                    source_id, annotation_id
+                ))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(delete_annotation_response.status(), StatusCode::OK);
+
+    let delete_bookmark_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/bookmarks?entity_type=run&entity_id={}",
+                    run.id
+                ))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(delete_bookmark_response.status(), StatusCode::OK);
+    Ok(())
+}
+
 struct TestContext {
     _temp_dir: TempDir,
     state: AppState,
@@ -551,4 +757,25 @@ async fn wait_for_run_completion(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Err(anyhow!("timed out waiting for run completion"))
+}
+
+async fn wait_for_comparison_terminal(
+    state: &AppState,
+    comparison_id: &str,
+) -> Result<autothesis::models::Comparison> {
+    for _ in 0..100 {
+        let comparison = state
+            .db
+            .get_comparison(comparison_id)
+            .await?
+            .expect("comparison exists while polling");
+        if comparison.status == "completed"
+            || comparison.status == "failed"
+            || comparison.status == "failed_partial"
+        {
+            return Ok(comparison);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(anyhow!("timed out waiting for comparison completion"))
 }

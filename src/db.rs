@@ -1,6 +1,7 @@
 use crate::models::{
-    Comparison, ComparisonRun, ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord,
-    Iteration, IterationDetail, Run, SearchQueryRecord, SearchResultRecord, SourceRecord,
+    Bookmark, Comparison, ComparisonRun, ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord,
+    Iteration, IterationDetail, Run, SearchQueryRecord, SearchResultRecord, SourceAnnotation,
+    SourceRecord,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -488,6 +489,119 @@ impl Database {
         }))
     }
 
+    pub async fn upsert_bookmark(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        title: &str,
+        note: Option<&str>,
+        target_path: &str,
+    ) -> Result<Bookmark> {
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO bookmarks (id, entity_type, entity_id, title, note, target_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(entity_type, entity_id)
+             DO UPDATE SET
+                title = excluded.title,
+                note = excluded.note,
+                target_path = excluded.target_path,
+                updated_at = excluded.updated_at",
+            params![
+                id,
+                entity_type,
+                entity_id,
+                title,
+                note,
+                target_path,
+                encode_time(now),
+                encode_time(now),
+            ],
+        )?;
+        self.get_bookmark_by_entity(entity_type, entity_id)
+            .await?
+            .context("bookmark missing after upsert")
+    }
+
+    pub async fn list_bookmarks(&self, limit: i64) -> Result<Vec<Bookmark>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM bookmarks ORDER BY updated_at DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_bookmark)?;
+        collect_rows(rows)
+    }
+
+    pub async fn delete_bookmark(&self, entity_type: &str, entity_id: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "DELETE FROM bookmarks WHERE entity_type = ?1 AND entity_id = ?2",
+            params![entity_type, entity_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn create_source_annotation(
+        &self,
+        source_id: &str,
+        run_id: &str,
+        selected_text: &str,
+        annotation_markdown: &str,
+        tag: Option<&str>,
+    ) -> Result<SourceAnnotation> {
+        let annotation = SourceAnnotation {
+            id: Uuid::new_v4().to_string(),
+            source_id: source_id.to_string(),
+            run_id: run_id.to_string(),
+            selected_text: selected_text.to_string(),
+            annotation_markdown: annotation_markdown.to_string(),
+            tag: tag.map(ToOwned::to_owned),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO source_annotations (id, source_id, run_id, selected_text, annotation_markdown, tag, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                annotation.id,
+                annotation.source_id,
+                annotation.run_id,
+                annotation.selected_text,
+                annotation.annotation_markdown,
+                annotation.tag,
+                encode_time(annotation.created_at),
+                encode_time(annotation.updated_at),
+            ],
+        )?;
+        self.get_source_annotation(&annotation.id)
+            .await?
+            .context("source annotation missing after insert")
+    }
+
+    pub async fn list_source_annotations(&self, source_id: &str) -> Result<Vec<SourceAnnotation>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM source_annotations WHERE source_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = statement.query_map([source_id], map_source_annotation)?;
+        collect_rows(rows)
+    }
+
+    pub async fn delete_source_annotation(
+        &self,
+        source_id: &str,
+        annotation_id: &str,
+    ) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "DELETE FROM source_annotations WHERE source_id = ?1 AND id = ?2",
+            params![source_id, annotation_id],
+        )?;
+        Ok(affected > 0)
+    }
+
     fn update_iteration_field(
         &self,
         iteration_id: &str,
@@ -560,6 +674,32 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    async fn get_bookmark_by_entity(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<Bookmark>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM bookmarks WHERE entity_type = ?1 AND entity_id = ?2",
+            params![entity_type, entity_id],
+            map_bookmark,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    async fn get_source_annotation(&self, annotation_id: &str) -> Result<Option<SourceAnnotation>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM source_annotations WHERE id = ?1",
+            [annotation_id],
+            map_source_annotation,
+        )
+        .optional()
+        .map_err(Into::into)
     }
 }
 
@@ -860,6 +1000,14 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub async fn list_comparison_ids_for_run(&self, run_id: &str) -> Result<Vec<String>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT comparison_id FROM comparison_runs WHERE run_id = ?1")?;
+        let rows = statement.query_map([run_id], |row| row.get::<_, String>(0))?;
+        collect_rows(rows)
+    }
+
     pub async fn update_comparison_status(&self, comparison_id: &str, status: &str) -> Result<()> {
         let conn = self.open_connection()?;
         conn.execute(
@@ -872,6 +1020,7 @@ impl Database {
     pub async fn finalize_comparison(
         &self,
         comparison_id: &str,
+        status: &str,
         final_comparison_html: &str,
         summary: Option<&str>,
     ) -> Result<()> {
@@ -881,7 +1030,7 @@ impl Database {
              SET status = ?1, updated_at = ?2, final_comparison_html = ?3, summary = ?4
              WHERE id = ?5",
             params![
-                "completed",
+                status,
                 encode_time(Utc::now()),
                 final_comparison_html,
                 summary,
@@ -908,5 +1057,31 @@ fn map_comparison(row: &Row<'_>) -> rusqlite::Result<Comparison> {
         updated_at: parse_time(row.get("updated_at")?)?,
         final_comparison_html: row.get("final_comparison_html")?,
         summary: row.get("summary")?,
+    })
+}
+
+fn map_bookmark(row: &Row<'_>) -> rusqlite::Result<Bookmark> {
+    Ok(Bookmark {
+        id: row.get("id")?,
+        entity_type: row.get("entity_type")?,
+        entity_id: row.get("entity_id")?,
+        title: row.get("title")?,
+        note: row.get("note")?,
+        target_path: row.get("target_path")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_source_annotation(row: &Row<'_>) -> rusqlite::Result<SourceAnnotation> {
+    Ok(SourceAnnotation {
+        id: row.get("id")?,
+        source_id: row.get("source_id")?,
+        run_id: row.get("run_id")?,
+        selected_text: row.get("selected_text")?,
+        annotation_markdown: row.get("annotation_markdown")?,
+        tag: row.get("tag")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
     })
 }

@@ -2,7 +2,7 @@ use crate::{
     app_state::AppState,
     markdown::render_markdown,
     models::{EvaluatorOutput, EvidenceNoteRecord, Run, SourceRecord},
-    services::{critic, evaluator, planner, reader, search, synthesizer},
+    services::{comparison, critic, evaluator, planner, reader, search, synthesizer},
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
@@ -24,8 +24,10 @@ pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
                 None,
             )
             .await;
+        let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
         return Err(error);
     }
+    let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
     Ok(())
 }
 
@@ -38,6 +40,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
 
     info!(%run_id, ticker = %run.ticker, "starting run");
     state.db.set_run_status(run_id, "running").await?;
+    let _ = comparison::sync_comparisons_for_run(&state, run_id).await;
     state
         .db
         .insert_event(run_id, None, "run_started", "Research run started", None)

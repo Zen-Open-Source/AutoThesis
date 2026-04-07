@@ -4,7 +4,20 @@
 
 {% block content %}
 <section class="panel">
-  <h1>{{ run.ticker }}</h1>
+  <div class="panel-row">
+    <h1>{{ run.ticker }}</h1>
+    <button
+      type="button"
+      class="secondary-button compact-button bookmark-button"
+      data-entity-type="run"
+      data-entity-id="{{ run.id }}"
+      data-title="{{ run.ticker }} run"
+      data-target-path="/runs/{{ run.id }}"
+    >
+      Bookmark run
+    </button>
+  </div>
+  <p id="run-bookmark-message" class="error-text hidden"></p>
   <div class="meta-grid">
     <div><strong>Status:</strong> <span id="run-status" class="badge badge-{{ run.status }}">{{ run.status }}</span></div>
     <div><strong>Created:</strong> {{ run.created_at }}</div>
@@ -59,6 +72,41 @@
   const statusEl = document.getElementById('run-status');
   const finalMemoEl = document.getElementById('final-memo');
   const finalMemoPlaceholder = document.getElementById('final-memo-placeholder');
+  const bookmarkMessage = document.getElementById('run-bookmark-message');
+
+  function showBookmarkMessage(message, isError = false) {
+    bookmarkMessage.textContent = message;
+    bookmarkMessage.classList.remove('hidden');
+    bookmarkMessage.classList.toggle('error-text', isError);
+    if (!isError) {
+      setTimeout(() => bookmarkMessage.classList.add('hidden'), 2000);
+    }
+  }
+
+  async function saveBookmark(button) {
+    const payload = {
+      entity_type: button.dataset.entityType,
+      entity_id: button.dataset.entityId,
+      title: button.dataset.title,
+      target_path: button.dataset.targetPath,
+      note: null
+    };
+    const response = await fetch('/api/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to save bookmark' }));
+      showBookmarkMessage(body.error || 'Failed to save bookmark', true);
+      return;
+    }
+    showBookmarkMessage('Bookmarked');
+  }
+
+  document.querySelectorAll('.bookmark-button').forEach((button) => {
+    button.addEventListener('click', () => saveBookmark(button));
+  });
 
   function renderEvents(events) {
     eventList.innerHTML = events.map((event) => `

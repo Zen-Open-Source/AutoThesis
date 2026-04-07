@@ -3,84 +3,124 @@
 {% block title %}{{ comparison.name }} - Comparison{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 py-8">
-    <div class="mb-8">
-        <div class="flex justify-between items-start">
-            <div>
-                <h1 class="text-3xl font-bold mb-2">{{ comparison.name }}</h1>
-                <p class="text-gray-600">{{ comparison.question }}</p>
-            </div>
-            <div class="flex space-x-2">
-                <a href="/comparisons" class="text-blue-600 hover:text-blue-800">← Back to Comparisons</a>
-            </div>
-        </div>
-        <div class="mt-4">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium
-                {% if comparison.status == "completed" %}bg-green-100 text-green-800
-                {% else %}bg-yellow-100 text-yellow-800{% endif %}">
-                {{ comparison.status }}
-            </span>
-        </div>
+<section class="panel hero">
+  <div class="panel-row">
+    <div>
+      <h1>{{ comparison.name }}</h1>
+      <p>{{ comparison.question }}</p>
     </div>
-
-    {% if comparison_runs.is_empty() %}
-    <div class="text-center py-12 bg-gray-50 rounded-lg">
-        <p class="text-gray-600">No runs in this comparison yet.</p>
+    <div class="comparison-actions">
+      <a href="/comparisons">Back to comparisons</a>
+      <button
+        type="button"
+        class="secondary-button compact-button bookmark-button"
+        data-entity-type="comparison"
+        data-entity-id="{{ comparison.id }}"
+        data-title="{{ comparison.name }}"
+        data-target-path="/comparisons/{{ comparison.id }}"
+      >
+        Bookmark comparison
+      </button>
     </div>
-    {% else %}
-    <div class="grid gap-6" style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));">
-        {% for run in comparison_runs %}
-        <div class="bg-white rounded-lg shadow p-6">
-            <div class="flex justify-between items-start mb-4">
-                <h2 class="text-xl font-bold">{{ run.ticker }}</h2>
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
-                    {% if run.status == "completed" %}bg-green-100 text-green-800
-                    {% else if run.status == "failed" %}bg-red-100 text-red-800
-                    {% else %}bg-yellow-100 text-yellow-800{% endif %}">
-                    {{ run.status }}
-                </span>
-            </div>
+  </div>
+  <div class="meta-grid">
+    <div><strong>Status:</strong> <span class="badge badge-{{ comparison.status }}">{{ comparison.status }}</span></div>
+    <div><strong>Created:</strong> {{ comparison.created_at }}</div>
+  </div>
+  <p id="comparison-bookmark-message" class="error-text hidden"></p>
+</section>
 
-            {% if run.has_final_memo %}
-            <div class="prose prose-sm max-w-none mb-4">
-                {{ run.final_memo_html|safe }}
-            </div>
-            {% else %}
-            <div class="text-center py-8">
-                <div class="animate-pulse flex flex-col items-center">
-                    <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                    <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-                    <div class="h-4 bg-gray-200 rounded w-2/3"></div>
-                </div>
-                <p class="text-gray-500 mt-4">Research in progress...</p>
-            </div>
-            {% endif %}
+{% if has_comparison_summary %}
+  <section class="panel">
+    <h2>Comparison summary</h2>
+    <p>{{ comparison_summary }}</p>
+  </section>
+{% endif %}
 
-            {% if run.has_summary %}
-            <div class="mt-4 pt-4 border-t">
-                <h3 class="text-sm font-semibold text-gray-700 mb-2">Summary</h3>
-                <p class="text-sm text-gray-600">{{ run.summary }}</p>
-            </div>
-            {% endif %}
-        </div>
-        {% endfor %}
+{% if has_final_comparison_html %}
+  <section class="panel">
+    <h2>Rollup memo</h2>
+    <div class="memo-body">{{ final_comparison_html|safe }}</div>
+  </section>
+{% endif %}
+
+<section class="panel">
+  <h2>Ticker runs</h2>
+  {% if comparison_runs.is_empty() %}
+    <p>No runs in this comparison yet.</p>
+  {% else %}
+    <div class="comparison-grid">
+      {% for run in comparison_runs %}
+        <article class="source-card">
+          <div class="comparison-run-head">
+            <h3>{{ run.ticker }}</h3>
+            <span class="badge badge-{{ run.status }}">{{ run.status }}</span>
+          </div>
+
+          {% if run.has_run %}
+            <p><a href="/runs/{{ run.run_id }}">Open run details</a></p>
+          {% endif %}
+
+          {% if run.has_summary %}
+            <p>{{ run.summary }}</p>
+          {% endif %}
+
+          {% if run.has_final_memo %}
+            <div class="memo-body">{{ run.final_memo_html|safe }}</div>
+          {% else %}
+            <p>Research in progress…</p>
+          {% endif %}
+        </article>
+      {% endfor %}
     </div>
+  {% endif %}
+</section>
 
-    {% if !comparison_runs.is_empty() %}
-    <div class="mt-8 text-center">
-        <p class="text-sm text-gray-500">Research is running in the background. Refresh to see updates.</p>
-    </div>
-    {% endif %}
-    {% endif %}
-</div>
+{% if has_pending_runs %}
+  <section class="panel">
+    <p>Research is still in progress. This page auto-refreshes every 10 seconds.</p>
+  </section>
+{% endif %}
 
 <script>
-// Auto-refresh every 10 seconds while runs are in progress
-const hasPendingRuns = {{ has_pending_runs }};
-if (hasPendingRuns) {
-    setTimeout(() => {
-        window.location.reload();
-    }, 10000);
-}
+  function showBookmarkMessage(message, isError = false) {
+    const messageEl = document.getElementById('comparison-bookmark-message');
+    messageEl.textContent = message;
+    messageEl.classList.remove('hidden');
+    messageEl.classList.toggle('error-text', isError);
+    if (!isError) {
+      setTimeout(() => messageEl.classList.add('hidden'), 2000);
+    }
+  }
+
+  async function saveBookmark(button) {
+    const payload = {
+      entity_type: button.dataset.entityType,
+      entity_id: button.dataset.entityId,
+      title: button.dataset.title,
+      target_path: button.dataset.targetPath,
+      note: null
+    };
+    const response = await fetch('/api/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to save bookmark' }));
+      showBookmarkMessage(body.error || 'Failed to save bookmark', true);
+      return;
+    }
+    showBookmarkMessage('Bookmarked');
+  }
+
+  document.querySelectorAll('.bookmark-button').forEach((button) => {
+    button.addEventListener('click', () => saveBookmark(button));
+  });
+
+  const hasPendingRuns = {{ has_pending_runs }};
+  if (hasPendingRuns) {
+    setTimeout(() => window.location.reload(), 10000);
+  }
 </script>
 {% endblock %}

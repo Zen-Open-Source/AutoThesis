@@ -153,6 +153,47 @@ pub struct ComparisonDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub title: String,
+    pub note: Option<String>,
+    pub target_path: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBookmarkRequest {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub title: String,
+    pub note: Option<String>,
+    pub target_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceAnnotation {
+    pub id: String,
+    pub source_id: String,
+    pub run_id: String,
+    pub selected_text: String,
+    pub annotation_markdown: String,
+    pub tag: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSourceAnnotationRequest {
+    pub run_id: String,
+    pub selected_text: String,
+    pub annotation_markdown: String,
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalMemoResponse {
     pub run_id: String,
     pub status: String,

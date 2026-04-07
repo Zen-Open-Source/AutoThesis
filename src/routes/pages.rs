@@ -3,8 +3,8 @@ use crate::{
     error::{AppError, AppResult},
     markdown::render_markdown,
     models::{
-        EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run, SearchQueryRecord,
-        SourceRecord,
+        Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run,
+        SearchQueryRecord, SourceRecord,
     },
 };
 use askama::Template;
@@ -142,6 +142,38 @@ pub async fn iteration_detail(
     Ok(Html(html))
 }
 
+#[derive(Template)]
+#[template(path = "bookmarks.html")]
+struct BookmarksTemplate {
+    run_bookmarks: Vec<Bookmark>,
+    comparison_bookmarks: Vec<Bookmark>,
+    source_bookmarks: Vec<Bookmark>,
+}
+
+pub async fn bookmarks_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let bookmarks = state.db.list_bookmarks(500).await.map_err(AppError::from)?;
+    let mut run_bookmarks = Vec::new();
+    let mut comparison_bookmarks = Vec::new();
+    let mut source_bookmarks = Vec::new();
+    for bookmark in bookmarks {
+        match bookmark.entity_type.as_str() {
+            "run" => run_bookmarks.push(bookmark),
+            "comparison" => comparison_bookmarks.push(bookmark),
+            "source" => source_bookmarks.push(bookmark),
+            _ => {}
+        }
+    }
+    Ok(Html(
+        BookmarksTemplate {
+            run_bookmarks,
+            comparison_bookmarks,
+            source_bookmarks,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
 // Comparison templates
 #[derive(Template)]
 #[template(path = "comparisons.html")]
@@ -151,6 +183,8 @@ struct ComparisonsTemplate {
 
 #[derive(Clone)]
 struct ComparisonRunView {
+    run_id: String,
+    has_run: bool,
     ticker: String,
     status: String,
     has_final_memo: bool,
@@ -163,6 +197,10 @@ struct ComparisonRunView {
 #[template(path = "comparison.html")]
 struct ComparisonTemplate {
     comparison: crate::models::Comparison,
+    has_comparison_summary: bool,
+    comparison_summary: String,
+    has_final_comparison_html: bool,
+    final_comparison_html: String,
     comparison_runs: Vec<ComparisonRunView>,
     has_pending_runs: bool,
 }
@@ -196,10 +234,17 @@ pub async fn comparison_detail(
         .list_comparison_runs(&comparison_id)
         .await
         .map_err(AppError::from)?;
+    let comparison_summary = comparison.summary.clone().unwrap_or_default();
+    let final_comparison_html = comparison.final_comparison_html.clone().unwrap_or_default();
 
     let run_views: Vec<ComparisonRunView> = comparison_runs
         .into_iter()
         .map(|cr| {
+            let run_id = cr
+                .run
+                .as_ref()
+                .map(|run| run.id.clone())
+                .unwrap_or_default();
             let final_memo_html = cr
                 .run
                 .as_ref()
@@ -211,6 +256,8 @@ pub async fn comparison_detail(
                 .and_then(|r| r.summary.clone())
                 .unwrap_or_default();
             ComparisonRunView {
+                run_id,
+                has_run: cr.run.is_some(),
                 ticker: cr.ticker,
                 status: cr
                     .run
@@ -230,6 +277,10 @@ pub async fn comparison_detail(
 
     let html = ComparisonTemplate {
         comparison,
+        has_comparison_summary: !comparison_summary.is_empty(),
+        comparison_summary,
+        has_final_comparison_html: !final_comparison_html.is_empty(),
+        final_comparison_html,
         comparison_runs: run_views,
         has_pending_runs,
     }

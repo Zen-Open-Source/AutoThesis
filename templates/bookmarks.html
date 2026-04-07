@@ -1,0 +1,111 @@
+{% extends "layout.html" %}
+
+{% block title %}Bookmarks · AutoThesis.finance{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <h1>Bookmarks</h1>
+  <p>Saved runs, comparisons, and source links for quick access.</p>
+</section>
+
+<section class="panel">
+  <h2>Run bookmarks</h2>
+  {% if run_bookmarks.len() == 0 %}
+    <p>No run bookmarks yet.</p>
+  {% else %}
+    <div class="bookmark-list">
+      {% for bookmark in run_bookmarks %}
+        <article class="bookmark-card" id="bookmark-{{ bookmark.entity_type }}-{{ bookmark.entity_id }}">
+          <div class="bookmark-card-head">
+            <a href="{{ bookmark.target_path }}"><strong>{{ bookmark.title }}</strong></a>
+            <button
+              type="button"
+              class="secondary-button compact-button bookmark-delete"
+              data-entity-type="{{ bookmark.entity_type }}"
+              data-entity-id="{{ bookmark.entity_id }}"
+            >
+              Remove
+            </button>
+          </div>
+          {% if bookmark.note.is_some() %}<p>{{ bookmark.note.as_ref().unwrap() }}</p>{% endif %}
+          <small>{{ bookmark.updated_at }}</small>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Comparison bookmarks</h2>
+  {% if comparison_bookmarks.len() == 0 %}
+    <p>No comparison bookmarks yet.</p>
+  {% else %}
+    <div class="bookmark-list">
+      {% for bookmark in comparison_bookmarks %}
+        <article class="bookmark-card" id="bookmark-{{ bookmark.entity_type }}-{{ bookmark.entity_id }}">
+          <div class="bookmark-card-head">
+            <a href="{{ bookmark.target_path }}"><strong>{{ bookmark.title }}</strong></a>
+            <button
+              type="button"
+              class="secondary-button compact-button bookmark-delete"
+              data-entity-type="{{ bookmark.entity_type }}"
+              data-entity-id="{{ bookmark.entity_id }}"
+            >
+              Remove
+            </button>
+          </div>
+          {% if bookmark.note.is_some() %}<p>{{ bookmark.note.as_ref().unwrap() }}</p>{% endif %}
+          <small>{{ bookmark.updated_at }}</small>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Source bookmarks</h2>
+  {% if source_bookmarks.len() == 0 %}
+    <p>No source bookmarks yet.</p>
+  {% else %}
+    <div class="bookmark-list">
+      {% for bookmark in source_bookmarks %}
+        <article class="bookmark-card" id="bookmark-{{ bookmark.entity_type }}-{{ bookmark.entity_id }}">
+          <div class="bookmark-card-head">
+            <a href="{{ bookmark.target_path }}"><strong>{{ bookmark.title }}</strong></a>
+            <button
+              type="button"
+              class="secondary-button compact-button bookmark-delete"
+              data-entity-type="{{ bookmark.entity_type }}"
+              data-entity-id="{{ bookmark.entity_id }}"
+            >
+              Remove
+            </button>
+          </div>
+          {% if bookmark.note.is_some() %}<p>{{ bookmark.note.as_ref().unwrap() }}</p>{% endif %}
+          <small>{{ bookmark.updated_at }}</small>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<script>
+  document.querySelectorAll('.bookmark-delete').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const entityType = button.dataset.entityType;
+      const entityId = button.dataset.entityId;
+      const response = await fetch(`/api/bookmarks?entity_type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}`, {
+        method: 'DELETE'
+      });
+      if (!response.ok) {
+        alert('Failed to remove bookmark');
+        return;
+      }
+      const card = document.getElementById(`bookmark-${entityType}-${entityId}`);
+      if (card) {
+        card.remove();
+      }
+    });
+  });
+</script>
+{% endblock %}

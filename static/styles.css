@@ -117,6 +117,29 @@ body {
   align-items: baseline;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.header-nav a {
+  color: var(--bg-header-tagline);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.header-nav a:hover {
+  color: var(--bg-header-text);
+}
+
 .brand {
   color: var(--bg-header-text);
   text-decoration: none;
@@ -137,6 +160,12 @@ body {
 }
 
 .hero h1 { margin-top: 0; }
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
 .form-grid {
   display: grid;
   gap: 1rem;
@@ -159,6 +188,18 @@ button {
   border: none;
   cursor: pointer;
   font-weight: 700;
+}
+.compact-button {
+  width: auto;
+  padding: 0.6rem 0.9rem;
+}
+.secondary-button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.secondary-button:hover {
+  background: var(--info-bg);
 }
 .run-list, .iteration-list, .source-list {
   display: grid;
@@ -197,6 +238,8 @@ button {
 .badge-queued, .badge-running, .badge-event { background: var(--info-bg); color: var(--info-text); }
 .badge-completed { background: var(--success-bg); color: var(--success); }
 .badge-failed { background: var(--danger-bg); color: var(--danger); }
+.badge-failed_partial { background: var(--danger-bg); color: var(--danger); }
+.badge-building { background: var(--info-bg); color: var(--info-text); }
 .memo-body {
   line-height: 1.65;
 }
@@ -212,6 +255,85 @@ button {
   padding: 0.12rem 0.35rem;
   border-radius: 6px;
 }
+.comparison-card-head,
+.comparison-run-head,
+.bookmark-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+.comparison-grid,
+.bookmark-list {
+  display: grid;
+  gap: 0.75rem;
+}
+.comparison-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.comparison-actions a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.source-actions {
+  margin-bottom: 0.75rem;
+}
+.annotation-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.annotation-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.75rem 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.annotation-list blockquote {
+  margin: 0.35rem 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--border);
+  color: var(--text-soft);
+}
+.bookmark-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.9rem;
+  background: var(--card-alt);
+}
+.bookmark-card a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 60;
+}
+.modal-card {
+  width: min(680px, 100%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 24px var(--shadow);
+  padding: 1rem;
+}
+.modal-card h3 {
+  margin-top: 0;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
 .hidden { display: none; }
 .error-text { color: var(--danger); }
 
@@ -226,6 +348,7 @@ button {
   justify-content: center;
   color: var(--bg-header-text);
   transition: background-color 0.2s ease;
+  width: auto;
 }
 .theme-toggle:hover {
   background: rgba(255, 255, 255, 0.1);
@@ -238,5 +361,8 @@ button {
 @media (min-width: 800px) {
   .form-grid, .meta-grid {
     grid-template-columns: 1fr 2fr;
+  }
+  .comparison-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

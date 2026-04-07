@@ -1,3 +1,4 @@
+pub mod comparison;
 pub mod critic;
 pub mod evaluator;
 pub mod orchestrator;
