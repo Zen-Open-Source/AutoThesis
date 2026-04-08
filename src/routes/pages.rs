@@ -4,14 +4,16 @@ use crate::{
     markdown::render_markdown,
     models::{
         BatchJob, Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run,
-        RunTemplate, SearchQueryRecord, SourceRecord,
+        RunTemplate, SearchQueryRecord, SourceRecord, Watchlist,
     },
+    services::dashboard,
 };
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Html,
 };
+use serde::Deserialize;
 
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -70,6 +72,125 @@ pub async fn index(State(state): State<AppState>) -> AppResult<Html<String>> {
         .render()
         .map_err(|error| AppError::Internal(error.into()))?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DashboardPageQuery {
+    pub watchlist_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct DashboardRowView {
+    ticker: String,
+    latest_status: String,
+    latest_score_text: String,
+    score_delta_text: String,
+    trend: String,
+    evidence_freshness: String,
+    decision_state: String,
+    has_summary: bool,
+    summary: String,
+    has_latest_run: bool,
+    latest_run_id: String,
+    last_run_updated_at_text: String,
+}
+
+#[derive(Template)]
+#[template(path = "dashboard.html")]
+struct DashboardTemplate {
+    watchlists: Vec<Watchlist>,
+    run_templates: Vec<RunTemplate>,
+    has_selected_watchlist: bool,
+    selected_watchlist_id: String,
+    selected_watchlist_name: String,
+    generated_at: String,
+    rows: Vec<DashboardRowView>,
+}
+
+pub async fn dashboard_index(
+    State(state): State<AppState>,
+    Query(query): Query<DashboardPageQuery>,
+) -> AppResult<Html<String>> {
+    let watchlists = state
+        .db
+        .list_watchlists(200)
+        .await
+        .map_err(AppError::from)?;
+    let run_templates = state
+        .db
+        .list_run_templates(200)
+        .await
+        .map_err(AppError::from)?;
+
+    if watchlists.is_empty() {
+        let html = DashboardTemplate {
+            watchlists,
+            run_templates,
+            has_selected_watchlist: false,
+            selected_watchlist_id: String::new(),
+            selected_watchlist_name: String::new(),
+            generated_at: String::new(),
+            rows: Vec::new(),
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?;
+        return Ok(Html(html));
+    }
+
+    let selected_watchlist = query
+        .watchlist_id
+        .as_deref()
+        .and_then(|watchlist_id| {
+            watchlists
+                .iter()
+                .find(|watchlist| watchlist.id == watchlist_id)
+        })
+        .cloned()
+        .unwrap_or_else(|| watchlists[0].clone());
+
+    let dashboard = dashboard::build_watchlist_dashboard(&state, &selected_watchlist.id)
+        .await
+        .map_err(AppError::from)?;
+
+    let rows = dashboard
+        .rows
+        .into_iter()
+        .map(|row| DashboardRowView {
+            ticker: row.ticker,
+            latest_status: row.latest_status,
+            latest_score_text: format_optional_score(row.latest_score),
+            score_delta_text: format_optional_delta(row.score_delta),
+            trend: row.trend,
+            evidence_freshness: row.evidence_freshness,
+            decision_state: row.decision_state,
+            has_summary: row
+                .summary
+                .as_ref()
+                .map(|summary| !summary.is_empty())
+                .unwrap_or(false),
+            summary: row.summary.unwrap_or_default(),
+            has_latest_run: row.latest_run_id.is_some(),
+            latest_run_id: row.latest_run_id.unwrap_or_default(),
+            last_run_updated_at_text: row
+                .last_run_updated_at
+                .map(|timestamp| timestamp.to_rfc3339())
+                .unwrap_or_else(|| "n/a".to_string()),
+        })
+        .collect::<Vec<_>>();
+
+    let html = DashboardTemplate {
+        watchlists,
+        run_templates,
+        has_selected_watchlist: true,
+        selected_watchlist_id: selected_watchlist.id,
+        selected_watchlist_name: selected_watchlist.name,
+        generated_at: dashboard.generated_at.to_rfc3339(),
+        rows,
+    }
+    .render()
+    .map_err(|error| AppError::Internal(error.into()))?;
+
+    Ok(Html(html))
 }
 
 pub async fn run_detail(
@@ -431,4 +552,16 @@ pub async fn comparison_detail(
     .render()
     .map_err(|error| AppError::Internal(error.into()))?;
     Ok(Html(html))
+}
+
+fn format_optional_score(score: Option<f64>) -> String {
+    score
+        .map(|value| format!("{value:.1}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_optional_delta(score_delta: Option<f64>) -> String {
+    score_delta
+        .map(|value| format!("{value:+.1}"))
+        .unwrap_or_else(|| "n/a".to_string())
 }

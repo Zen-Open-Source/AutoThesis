@@ -5,6 +5,7 @@ pub mod health;
 pub mod pages;
 pub mod run_templates;
 pub mod runs;
+pub mod watchlists;
 
 use crate::app_state::AppState;
 use axum::{
@@ -25,6 +26,7 @@ pub fn router(state: AppState) -> Router {
         .route("/comparisons/:id", get(pages::comparison_detail))
         .route("/batches", get(pages::batches_index))
         .route("/batches/:id", get(pages::batch_detail))
+        .route("/dashboard", get(pages::dashboard_index))
         .route("/bookmarks", get(pages::bookmarks_index))
         .route("/templates", get(pages::run_templates_index))
         .route("/healthz", get(health::healthz))
@@ -51,6 +53,29 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/run-templates/:id",
             put(run_templates::update_run_template).delete(run_templates::delete_run_template),
+        )
+        .route(
+            "/api/watchlists",
+            get(watchlists::list_watchlists).post(watchlists::create_watchlist),
+        )
+        .route(
+            "/api/watchlists/:id",
+            get(watchlists::get_watchlist)
+                .put(watchlists::update_watchlist)
+                .delete(watchlists::delete_watchlist),
+        )
+        .route(
+            "/api/watchlists/:id/tickers",
+            post(watchlists::add_watchlist_ticker),
+        )
+        .route(
+            "/api/watchlists/:id/tickers/:ticker",
+            axum::routing::delete(watchlists::remove_watchlist_ticker),
+        )
+        .route("/api/dashboard", get(watchlists::get_dashboard))
+        .route(
+            "/api/dashboard/refresh",
+            post(watchlists::refresh_dashboard_ticker),
         )
         .route(
             "/api/comparisons",

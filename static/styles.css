@@ -269,10 +269,18 @@ button {
   display: grid;
   gap: 0.75rem;
 }
+.dashboard-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.dashboard-card h3 {
+  margin: 0;
+}
 .comparison-actions {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-wrap: wrap;
 }
 .comparison-actions a {
   color: var(--accent);
@@ -364,6 +372,9 @@ button {
     grid-template-columns: 1fr 2fr;
   }
   .comparison-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

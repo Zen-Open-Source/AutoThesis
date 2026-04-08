@@ -1,7 +1,8 @@
 use crate::models::{
     BatchJob, BatchJobRun, BatchJobRunWithDetails, Bookmark, Comparison, ComparisonRun,
     ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord, Iteration, IterationDetail, Run,
-    RunTemplate, SearchQueryRecord, SearchResultRecord, SourceAnnotation, SourceRecord,
+    RunTemplate, SearchQueryRecord, SearchResultRecord, SourceAnnotation, SourceRecord, Watchlist,
+    WatchlistTicker,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -708,6 +709,21 @@ impl Database {
         .map_err(Into::into)
     }
 
+    async fn get_watchlist_ticker(
+        &self,
+        watchlist_id: &str,
+        ticker: &str,
+    ) -> Result<Option<WatchlistTicker>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM watchlist_tickers WHERE watchlist_id = ?1 AND ticker = ?2",
+            params![watchlist_id, ticker],
+            map_watchlist_ticker,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     async fn get_source_annotation(&self, annotation_id: &str) -> Result<Option<SourceAnnotation>> {
         let conn = self.open_connection()?;
         conn.query_row(
@@ -1327,6 +1343,191 @@ impl Database {
         let affected = conn.execute("DELETE FROM run_templates WHERE id = ?1", [template_id])?;
         Ok(affected > 0)
     }
+
+    pub async fn create_watchlist(&self, name: &str) -> Result<Watchlist> {
+        let watchlist = Watchlist {
+            id: Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO watchlists (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                watchlist.id,
+                watchlist.name,
+                encode_time(watchlist.created_at),
+                encode_time(watchlist.updated_at),
+            ],
+        )?;
+
+        self.get_watchlist(&watchlist.id)
+            .await?
+            .context("created watchlist missing after insert")
+    }
+
+    pub async fn get_watchlist(&self, watchlist_id: &str) -> Result<Option<Watchlist>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM watchlists WHERE id = ?1",
+            [watchlist_id],
+            map_watchlist,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_watchlists(&self, limit: i64) -> Result<Vec<Watchlist>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM watchlists ORDER BY updated_at DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_watchlist)?;
+        collect_rows(rows)
+    }
+
+    pub async fn update_watchlist_name(&self, watchlist_id: &str, name: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "UPDATE watchlists SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, encode_time(Utc::now()), watchlist_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn delete_watchlist(&self, watchlist_id: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute("DELETE FROM watchlists WHERE id = ?1", [watchlist_id])?;
+        Ok(affected > 0)
+    }
+
+    pub async fn replace_watchlist_tickers(
+        &self,
+        watchlist_id: &str,
+        tickers: &[String],
+    ) -> Result<()> {
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM watchlist_tickers WHERE watchlist_id = ?1",
+            [watchlist_id],
+        )?;
+        for (index, ticker) in tickers.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO watchlist_tickers (id, watchlist_id, ticker, sort_order, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    watchlist_id,
+                    ticker,
+                    index as i64,
+                    encode_time(Utc::now()),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub async fn list_watchlist_tickers(&self, watchlist_id: &str) -> Result<Vec<WatchlistTicker>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM watchlist_tickers WHERE watchlist_id = ?1 ORDER BY sort_order ASC, created_at ASC",
+        )?;
+        let rows = statement.query_map([watchlist_id], map_watchlist_ticker)?;
+        collect_rows(rows)
+    }
+
+    pub async fn add_ticker_to_watchlist(
+        &self,
+        watchlist_id: &str,
+        ticker: &str,
+        sort_order: i64,
+    ) -> Result<WatchlistTicker> {
+        let id = Uuid::new_v4().to_string();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO watchlist_tickers (id, watchlist_id, ticker, sort_order, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(watchlist_id, ticker) DO NOTHING",
+            params![
+                id,
+                watchlist_id,
+                ticker,
+                sort_order,
+                encode_time(Utc::now())
+            ],
+        )?;
+        self.get_watchlist_ticker(watchlist_id, ticker)
+            .await?
+            .context("watchlist ticker missing after insert")
+    }
+
+    pub async fn remove_ticker_from_watchlist(
+        &self,
+        watchlist_id: &str,
+        ticker: &str,
+    ) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "DELETE FROM watchlist_tickers WHERE watchlist_id = ?1 AND ticker = ?2",
+            params![watchlist_id, ticker],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn list_runs_for_ticker(&self, ticker: &str, limit: i64) -> Result<Vec<Run>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM runs WHERE ticker = ?1 ORDER BY created_at DESC LIMIT ?2")?;
+        let rows = statement.query_map(params![ticker, limit], map_run)?;
+        collect_rows(rows)
+    }
+
+    pub async fn get_latest_iteration_evaluation_score(&self, run_id: &str) -> Result<Option<f64>> {
+        let conn = self.open_connection()?;
+        let evaluation_json = conn
+            .query_row(
+                "SELECT evaluation_json
+                 FROM iterations
+                 WHERE run_id = ?1 AND evaluation_json IS NOT NULL
+                 ORDER BY iteration_number DESC
+                 LIMIT 1",
+                [run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(evaluation_json.and_then(|raw| {
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|value| value.get("score").and_then(|score| score.as_f64()))
+        }))
+    }
+
+    pub async fn get_latest_source_timestamp_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let conn = self.open_connection()?;
+        let raw_timestamp = conn
+            .query_row(
+                "SELECT COALESCE(published_at, created_at)
+                 FROM sources
+                 WHERE run_id = ?1
+                 ORDER BY COALESCE(published_at, created_at) DESC
+                 LIMIT 1",
+                [run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        match raw_timestamp {
+            Some(raw) => Ok(Some(parse_time(raw)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 fn map_comparison(row: &Row<'_>) -> rusqlite::Result<Comparison> {
@@ -1362,6 +1563,25 @@ fn map_run_template(row: &Row<'_>) -> rusqlite::Result<RunTemplate> {
         description: row.get("description")?,
         created_at: parse_time(row.get("created_at")?)?,
         updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_watchlist(row: &Row<'_>) -> rusqlite::Result<Watchlist> {
+    Ok(Watchlist {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_watchlist_ticker(row: &Row<'_>) -> rusqlite::Result<WatchlistTicker> {
+    Ok(WatchlistTicker {
+        id: row.get("id")?,
+        watchlist_id: row.get("watchlist_id")?,
+        ticker: row.get("ticker")?,
+        sort_order: row.get("sort_order")?,
+        created_at: parse_time(row.get("created_at")?)?,
     })
 }
 

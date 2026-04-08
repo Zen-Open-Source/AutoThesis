@@ -1,0 +1,223 @@
+{% extends "layout.html" %}
+
+{% block title %}Decision Dashboard - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>Decision dashboard</h1>
+    <a href="/templates">Manage templates</a>
+  </div>
+  <p>Track watchlist conviction, trend, freshness, and launch refresh runs in one place.</p>
+</section>
+
+<section class="panel">
+  <h2>Watchlists</h2>
+  {% if has_selected_watchlist %}
+    <div class="form-grid">
+      <label>
+        <span>Current watchlist</span>
+        <select id="watchlist-select">
+          {% for watchlist in watchlists %}
+            <option value="{{ watchlist.id }}" {% if watchlist.id == selected_watchlist_id %}selected{% endif %}>{{ watchlist.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Refresh template</span>
+        <select id="refresh-template-id">
+          <option value="">Default question</option>
+          {% for template in run_templates %}
+            <option value="{{ template.id }}">{{ template.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <p><strong>{{ selected_watchlist_name }}</strong> · Generated: {{ generated_at }}</p>
+  {% else %}
+    <p>No watchlists yet — create your first one below.</p>
+  {% endif %}
+
+  <form id="create-watchlist-form" class="form-grid">
+    <label>
+      <span>New watchlist name</span>
+      <input type="text" name="name" required placeholder="Core holdings" />
+    </label>
+    <label>
+      <span>Tickers (comma-separated)</span>
+      <input type="text" name="tickers" placeholder="NVDA, MSFT, AAPL" />
+    </label>
+    <button type="submit" class="compact-button">Create watchlist</button>
+  </form>
+  <p id="create-watchlist-error" class="error-text hidden"></p>
+
+  {% if has_selected_watchlist %}
+    <form id="add-ticker-form" class="form-grid">
+      <label>
+        <span>Add ticker to current watchlist</span>
+        <input type="text" name="ticker" maxlength="12" required placeholder="AMZN" />
+      </label>
+      <button type="submit" class="compact-button">Add ticker</button>
+    </form>
+  {% endif %}
+</section>
+
+{% if has_selected_watchlist %}
+  <section class="panel">
+    <h2>Ticker scorecards</h2>
+    {% if rows.len() == 0 %}
+      <p>This watchlist has no tickers yet.</p>
+    {% else %}
+      <div class="dashboard-grid">
+        {% for row in rows %}
+          <article class="source-card dashboard-card" data-status="{{ row.latest_status }}">
+            <div class="comparison-card-head">
+              <h3>{{ row.ticker }}</h3>
+              <span class="badge badge-{{ row.latest_status }}">{{ row.latest_status }}</span>
+            </div>
+            <div class="meta-grid">
+              <div><strong>Score:</strong> {{ row.latest_score_text }}</div>
+              <div><strong>Delta:</strong> {{ row.score_delta_text }}</div>
+              <div><strong>Trend:</strong> {{ row.trend }}</div>
+              <div><strong>Freshness:</strong> {{ row.evidence_freshness }}</div>
+              <div><strong>Decision:</strong> {{ row.decision_state }}</div>
+              <div><strong>Updated:</strong> {{ row.last_run_updated_at_text }}</div>
+            </div>
+            {% if row.has_summary %}
+              <p>{{ row.summary }}</p>
+            {% endif %}
+
+            <div class="comparison-actions">
+              {% if row.has_latest_run %}
+                <a href="/runs/{{ row.latest_run_id }}">Open latest run</a>
+              {% endif %}
+              <button
+                type="button"
+                class="secondary-button compact-button refresh-ticker"
+                data-ticker="{{ row.ticker }}"
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                class="secondary-button compact-button remove-ticker"
+                data-ticker="{{ row.ticker }}"
+              >
+                Remove
+              </button>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+{% endif %}
+
+<script>
+  const selectedWatchlistId = '{{ selected_watchlist_id }}';
+
+  function redirectToWatchlist(watchlistId) {
+    window.location.href = `/dashboard?watchlist_id=${encodeURIComponent(watchlistId)}`;
+  }
+
+  const watchlistSelect = document.getElementById('watchlist-select');
+  if (watchlistSelect) {
+    watchlistSelect.addEventListener('change', () => redirectToWatchlist(watchlistSelect.value));
+  }
+
+  const createWatchlistForm = document.getElementById('create-watchlist-form');
+  const createWatchlistError = document.getElementById('create-watchlist-error');
+  createWatchlistForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    createWatchlistError.classList.add('hidden');
+    createWatchlistError.textContent = '';
+
+    const formData = new FormData(createWatchlistForm);
+    const tickers = ((formData.get('tickers') || '').toString())
+      .split(',')
+      .map((ticker) => ticker.trim())
+      .filter(Boolean);
+    const payload = {
+      name: (formData.get('name') || '').toString(),
+      tickers
+    };
+    const response = await fetch('/api/watchlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to create watchlist' }));
+      createWatchlistError.textContent = body.error || 'Failed to create watchlist';
+      createWatchlistError.classList.remove('hidden');
+      return;
+    }
+    const body = await response.json();
+    redirectToWatchlist(body.watchlist.id);
+  });
+
+  const addTickerForm = document.getElementById('add-ticker-form');
+  if (addTickerForm && selectedWatchlistId) {
+    addTickerForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(addTickerForm);
+      const payload = { ticker: (formData.get('ticker') || '').toString() };
+      const response = await fetch(`/api/watchlists/${encodeURIComponent(selectedWatchlistId)}/tickers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        alert('Failed to add ticker');
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  document.querySelectorAll('.remove-ticker').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const ticker = button.dataset.ticker;
+      const response = await fetch(
+        `/api/watchlists/${encodeURIComponent(selectedWatchlistId)}/tickers/${encodeURIComponent(ticker)}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) {
+        alert('Failed to remove ticker');
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  document.querySelectorAll('.refresh-ticker').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const ticker = button.dataset.ticker;
+      const templateId = document.getElementById('refresh-template-id')?.value || null;
+      const response = await fetch('/api/dashboard/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          watchlist_id: selectedWatchlistId,
+          ticker,
+          template_id: templateId,
+          question: null
+        })
+      });
+      if (!response.ok) {
+        alert('Failed to refresh ticker');
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  const hasPending = [...document.querySelectorAll('.dashboard-card')].some((card) => {
+    const status = card.dataset.status;
+    return status === 'queued' || status === 'running';
+  });
+  if (hasPending) {
+    setTimeout(() => window.location.reload(), 15000);
+  }
+</script>
+{% endblock %}

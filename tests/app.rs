@@ -620,6 +620,318 @@ async fn run_cancel_and_retry_controls_work() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn watchlist_crud_endpoints_work() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let create_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/watchlists")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Core Watchlist",
+                    "tickers": ["NVDA", "AAPL"]
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_watchlist_response.status(), StatusCode::OK);
+    let create_watchlist_body = create_watchlist_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let watchlist_payload: Value = serde_json::from_slice(&create_watchlist_body)?;
+    let watchlist_id = watchlist_payload["watchlist"]["id"]
+        .as_str()
+        .expect("watchlist id")
+        .to_string();
+    assert_eq!(
+        watchlist_payload["tickers"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        2
+    );
+
+    let add_ticker_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/watchlists/{watchlist_id}/tickers"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "ticker": "MSFT"
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(add_ticker_response.status(), StatusCode::OK);
+    let add_ticker_body = add_ticker_response.into_body().collect().await?.to_bytes();
+    let add_ticker_payload: Value = serde_json::from_slice(&add_ticker_body)?;
+    assert_eq!(
+        add_ticker_payload["tickers"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        3
+    );
+
+    let remove_ticker_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/watchlists/{watchlist_id}/tickers/MSFT"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(remove_ticker_response.status(), StatusCode::OK);
+    let remove_ticker_body = remove_ticker_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let remove_ticker_payload: Value = serde_json::from_slice(&remove_ticker_body)?;
+    assert_eq!(
+        remove_ticker_payload["tickers"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        2
+    );
+
+    let update_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/watchlists/{watchlist_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Core Watchlist Updated",
+                    "tickers": ["TSLA", "META"]
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(update_watchlist_response.status(), StatusCode::OK);
+    let update_watchlist_body = update_watchlist_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let update_watchlist_payload: Value = serde_json::from_slice(&update_watchlist_body)?;
+    assert_eq!(
+        update_watchlist_payload["watchlist"]["name"]
+            .as_str()
+            .unwrap_or_default(),
+        "Core Watchlist Updated"
+    );
+    assert_eq!(
+        update_watchlist_payload["tickers"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        2
+    );
+
+    let list_watchlists_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/watchlists")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(list_watchlists_response.status(), StatusCode::OK);
+    let list_watchlists_body = list_watchlists_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let list_watchlists_payload: Value = serde_json::from_slice(&list_watchlists_body)?;
+    assert_eq!(
+        list_watchlists_payload
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        1
+    );
+
+    let delete_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/watchlists/{watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(delete_watchlist_response.status(), StatusCode::OK);
+
+    let get_deleted_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/watchlists/{watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        get_deleted_watchlist_response.status(),
+        StatusCode::NOT_FOUND
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn dashboard_payload_and_refresh_action_work() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let create_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/watchlists")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Dashboard Watchlist",
+                    "tickers": ["NVDA"]
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_watchlist_response.status(), StatusCode::OK);
+    let create_watchlist_body = create_watchlist_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let watchlist_payload: Value = serde_json::from_slice(&create_watchlist_body)?;
+    let watchlist_id = watchlist_payload["watchlist"]["id"]
+        .as_str()
+        .expect("watchlist id")
+        .to_string();
+
+    let create_template_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run-templates")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Dashboard Template",
+                    "question_template": "What changed most for {ticker}?",
+                    "description": null
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_template_response.status(), StatusCode::OK);
+    let create_template_body = create_template_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let template_payload: Value = serde_json::from_slice(&create_template_body)?;
+    let template_id = template_payload["id"].as_str().expect("template id");
+
+    let initial_dashboard_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/dashboard?watchlist_id={watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(initial_dashboard_response.status(), StatusCode::OK);
+    let initial_dashboard_body = initial_dashboard_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let initial_dashboard_payload: Value = serde_json::from_slice(&initial_dashboard_body)?;
+    assert_eq!(
+        initial_dashboard_payload["rows"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        1
+    );
+    assert_eq!(
+        initial_dashboard_payload["rows"][0]["latest_status"]
+            .as_str()
+            .unwrap_or_default(),
+        "no_data"
+    );
+
+    let refresh_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/dashboard/refresh")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "watchlist_id": watchlist_id,
+                    "ticker": "NVDA",
+                    "template_id": template_id,
+                    "question": null
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(refresh_response.status(), StatusCode::OK);
+    let refresh_body = refresh_response.into_body().collect().await?.to_bytes();
+    let refresh_payload: Value = serde_json::from_slice(&refresh_body)?;
+    let run_id = refresh_payload["run_id"].as_str().expect("run id");
+    let completed_run = wait_for_run_completion(&ctx.state, run_id).await?;
+    assert_eq!(completed_run.status, "completed");
+
+    let dashboard_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/dashboard?watchlist_id={watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(dashboard_response.status(), StatusCode::OK);
+    let dashboard_body = dashboard_response.into_body().collect().await?.to_bytes();
+    let dashboard_payload: Value = serde_json::from_slice(&dashboard_body)?;
+    assert_eq!(
+        dashboard_payload["rows"][0]["latest_status"]
+            .as_str()
+            .unwrap_or_default(),
+        "completed"
+    );
+    assert!(dashboard_payload["rows"][0]["latest_score"].is_number());
+    assert_eq!(
+        dashboard_payload["rows"][0]["latest_run_id"]
+            .as_str()
+            .unwrap_or_default(),
+        run_id
+    );
+    Ok(())
+}
+
 struct TestContext {
     _temp_dir: TempDir,
     state: AppState,

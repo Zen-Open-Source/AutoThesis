@@ -193,6 +193,68 @@ pub struct BatchJobDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Watchlist {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistTicker {
+    pub id: String,
+    pub watchlist_id: String,
+    pub ticker: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistDetail {
+    pub watchlist: Watchlist,
+    pub tickers: Vec<WatchlistTicker>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWatchlistRequest {
+    pub name: String,
+    pub tickers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateWatchlistRequest {
+    pub name: String,
+    pub tickers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddWatchlistTickerRequest {
+    pub ticker: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardTickerRow {
+    pub ticker: String,
+    pub latest_run_id: Option<String>,
+    pub latest_status: String,
+    pub latest_score: Option<f64>,
+    pub previous_score: Option<f64>,
+    pub score_delta: Option<f64>,
+    pub trend: String,
+    pub summary: Option<String>,
+    pub evidence_freshness: String,
+    pub decision_state: String,
+    pub last_run_updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardResponse {
+    pub watchlist: Watchlist,
+    pub rows: Vec<DashboardTickerRow>,
+    pub generated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateBatchJobRequest {
     pub name: String,
     pub tickers: Vec<String>,
@@ -228,6 +290,14 @@ pub struct UpdateRunTemplateRequest {
     pub name: String,
     pub question_template: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardRefreshRequest {
+    pub watchlist_id: String,
+    pub ticker: String,
+    pub template_id: Option<String>,
+    pub question: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

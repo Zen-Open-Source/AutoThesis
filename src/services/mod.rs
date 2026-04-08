@@ -1,6 +1,7 @@
 pub mod batch;
 pub mod comparison;
 pub mod critic;
+pub mod dashboard;
 pub mod evaluator;
 pub mod orchestrator;
 pub mod planner;
