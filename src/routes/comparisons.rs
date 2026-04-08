@@ -39,25 +39,41 @@ pub async fn create_comparison(
         ));
     }
 
-    // Use default question if not provided
-    let question = payload
+    // Use custom question, or selected template, or fallback default.
+    let question_template = if let Some(question) = payload
         .question
-        .map(|question| question.trim().to_string())
+        .as_deref()
+        .map(str::trim)
         .filter(|question| !question.is_empty())
-        .unwrap_or_else(|| {
-            "Compare these stocks across valuation, growth, and risk factors".to_string()
-        });
+    {
+        question.to_string()
+    } else if let Some(template_id) = payload
+        .template_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|template_id| !template_id.is_empty())
+    {
+        let template = state
+            .db
+            .get_run_template(template_id)
+            .await
+            .map_err(AppError::from)?
+            .ok_or_else(|| AppError::BadRequest("template_id was not found".to_string()))?;
+        template.question_template
+    } else {
+        "Compare these stocks across valuation, growth, and risk factors".to_string()
+    };
 
     // Create the comparison record
     let comparison = state
         .db
-        .create_comparison(comparison_name, &question)
+        .create_comparison(comparison_name, &question_template)
         .await
         .map_err(AppError::from)?;
 
     // Create individual runs for each ticker and link them to the comparison
     for (idx, ticker) in tickers.iter().enumerate() {
-        let ticker_question = format!("{}: {}", ticker, question);
+        let ticker_question = render_question_for_ticker(&question_template, ticker);
         let run = state
             .db
             .create_run(ticker, &ticker_question)
@@ -91,6 +107,14 @@ pub async fn create_comparison(
         comparison_id: comparison.id,
         status: "queued".to_string(),
     }))
+}
+
+fn render_question_for_ticker(question_template: &str, ticker: &str) -> String {
+    if question_template.contains("{ticker}") {
+        question_template.replace("{ticker}", ticker)
+    } else {
+        format!("{ticker}: {question_template}")
+    }
 }
 
 pub async fn list_comparisons(

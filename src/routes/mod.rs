@@ -1,12 +1,14 @@
+pub mod batches;
 pub mod bookmarks;
 pub mod comparisons;
 pub mod health;
 pub mod pages;
+pub mod run_templates;
 pub mod runs;
 
 use crate::app_state::AppState;
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -21,10 +23,15 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/comparisons", get(pages::comparisons_index))
         .route("/comparisons/:id", get(pages::comparison_detail))
+        .route("/batches", get(pages::batches_index))
+        .route("/batches/:id", get(pages::batch_detail))
         .route("/bookmarks", get(pages::bookmarks_index))
+        .route("/templates", get(pages::run_templates_index))
         .route("/healthz", get(health::healthz))
         .route("/api/runs", post(runs::create_run).get(runs::list_runs))
         .route("/api/runs/:id", get(runs::get_run))
+        .route("/api/runs/:id/cancel", post(runs::cancel_run))
+        .route("/api/runs/:id/retry", post(runs::retry_run))
         .route("/api/runs/:id/events", get(runs::get_events))
         .route("/api/runs/:id/iterations", get(runs::list_iterations))
         .route(
@@ -32,6 +39,19 @@ pub fn router(state: AppState) -> Router {
             get(runs::get_iteration),
         )
         .route("/api/runs/:id/final", get(runs::get_final))
+        .route(
+            "/api/batches",
+            post(batches::create_batch_job).get(batches::list_batch_jobs),
+        )
+        .route("/api/batches/:id", get(batches::get_batch_job))
+        .route(
+            "/api/run-templates",
+            get(run_templates::list_run_templates).post(run_templates::create_run_template),
+        )
+        .route(
+            "/api/run-templates/:id",
+            put(run_templates::update_run_template).delete(run_templates::delete_run_template),
+        )
         .route(
             "/api/comparisons",
             post(comparisons::create_comparison).get(comparisons::list_comparisons),

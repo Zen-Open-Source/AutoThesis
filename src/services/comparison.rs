@@ -32,7 +32,7 @@ async fn sync_single_comparison(state: &AppState, comparison_id: &str) -> Result
             .unwrap_or("queued");
         match status {
             "completed" => completed_count += 1,
-            "failed" => failed_count += 1,
+            "failed" | "cancelled" => failed_count += 1,
             "queued" => has_queued = true,
             _ => has_running = true,
         }

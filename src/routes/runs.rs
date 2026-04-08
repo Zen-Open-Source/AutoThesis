@@ -3,7 +3,7 @@ use crate::{
     config::default_question_for_ticker,
     error::{AppError, AppResult},
     models::{CreateRunRequest, CreateRunResponse, FinalMemoResponse, IterationSummary},
-    services::orchestrator,
+    services::{batch, comparison, orchestrator},
 };
 use axum::{
     extract::{Path, State},
@@ -16,13 +16,28 @@ pub async fn create_run(
     Json(payload): Json<CreateRunRequest>,
 ) -> AppResult<Json<CreateRunResponse>> {
     let ticker = normalize_ticker(&payload.ticker)?;
-    let question = payload
+    let question = if let Some(question) = payload
         .question
-        .unwrap_or_else(|| default_question_for_ticker(&ticker));
-    let question = if question.trim().is_empty() {
-        default_question_for_ticker(&ticker)
+        .as_deref()
+        .map(str::trim)
+        .filter(|question| !question.is_empty())
+    {
+        question.to_string()
+    } else if let Some(template_id) = payload
+        .template_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|template_id| !template_id.is_empty())
+    {
+        let template = state
+            .db
+            .get_run_template(template_id)
+            .await
+            .map_err(AppError::from)?
+            .ok_or_else(|| AppError::BadRequest("template_id was not found".to_string()))?;
+        render_question_for_ticker(&template.question_template, &ticker)
     } else {
-        question.trim().to_string()
+        default_question_for_ticker(&ticker)
     };
 
     let run = state
@@ -36,16 +51,93 @@ pub async fn create_run(
         .await
         .map_err(AppError::from)?;
 
-    let state_for_task = state.clone();
-    let run_id = run.id.clone();
-    tokio::spawn(async move {
-        if let Err(error) = orchestrator::execute_run(state_for_task, run_id.clone()).await {
-            error!(%run_id, error = %error, "background orchestrator failed");
-        }
-    });
+    spawn_run(state.clone(), run.id.clone());
 
     Ok(Json(CreateRunResponse {
         run_id: run.id,
+        status: "queued".to_string(),
+    }))
+}
+
+pub async fn cancel_run(
+    Path(run_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Json<serde_json::Value>> {
+    let run = state
+        .db
+        .get_run(&run_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+
+    if run.status == "completed" || run.status == "failed" {
+        return Err(AppError::BadRequest(
+            "completed or failed runs cannot be cancelled".to_string(),
+        ));
+    }
+
+    if run.status != "cancelled" {
+        state
+            .db
+            .set_run_status(&run_id, "cancelled")
+            .await
+            .map_err(AppError::from)?;
+        state
+            .db
+            .insert_event(
+                &run_id,
+                None,
+                "run_cancelled",
+                "Run cancelled by user",
+                None,
+            )
+            .await
+            .map_err(AppError::from)?;
+    }
+
+    let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
+    let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
+
+    Ok(Json(serde_json::json!({
+        "run_id": run_id,
+        "status": "cancelled",
+    })))
+}
+
+pub async fn retry_run(
+    Path(run_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Json<CreateRunResponse>> {
+    let run = state
+        .db
+        .get_run(&run_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+
+    if run.status != "failed" && run.status != "cancelled" {
+        return Err(AppError::BadRequest(
+            "only failed or cancelled runs can be retried".to_string(),
+        ));
+    }
+
+    state
+        .db
+        .reset_run_for_retry(&run_id)
+        .await
+        .map_err(AppError::from)?;
+    state
+        .db
+        .insert_event(&run_id, None, "queued", "Run queued for retry", None)
+        .await
+        .map_err(AppError::from)?;
+
+    let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
+    let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
+    spawn_run(state.clone(), run_id.clone());
+
+    Ok(Json(CreateRunResponse {
+        run_id,
         status: "queued".to_string(),
     }))
 }
@@ -158,4 +250,20 @@ fn normalize_ticker(raw: &str) -> AppResult<String> {
         ));
     }
     Ok(cleaned)
+}
+
+fn render_question_for_ticker(question_template: &str, ticker: &str) -> String {
+    if question_template.contains("{ticker}") {
+        question_template.replace("{ticker}", ticker)
+    } else {
+        format!("{ticker}: {question_template}")
+    }
+}
+
+fn spawn_run(state: AppState, run_id: String) {
+    tokio::spawn(async move {
+        if let Err(error) = orchestrator::execute_run(state, run_id.clone()).await {
+            error!(%run_id, error = %error, "background orchestrator failed");
+        }
+    });
 }

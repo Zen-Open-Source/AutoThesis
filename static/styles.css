@@ -175,7 +175,7 @@ label span {
   margin-bottom: 0.4rem;
   font-weight: 600;
 }
-input, textarea, button {
+input, textarea, select, button {
   width: 100%;
   border-radius: 10px;
   border: 1px solid var(--border);
@@ -240,6 +240,7 @@ button {
 .badge-failed { background: var(--danger-bg); color: var(--danger); }
 .badge-failed_partial { background: var(--danger-bg); color: var(--danger); }
 .badge-building { background: var(--info-bg); color: var(--info-text); }
+.badge-cancelled { background: var(--warning); color: var(--bg-header-text); }
 .memo-body {
   line-height: 1.65;
 }

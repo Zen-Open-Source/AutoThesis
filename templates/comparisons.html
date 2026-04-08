@@ -6,9 +6,12 @@
 <section class="panel hero">
   <div class="panel-row">
     <h1>Stock comparisons</h1>
-    <button type="button" class="secondary-button compact-button" onclick="showNewComparisonModal()">
-      New comparison
-    </button>
+    <div class="comparison-actions">
+      <a href="/batches">Go to batches</a>
+      <button type="button" class="secondary-button compact-button" onclick="showNewComparisonModal()">
+        New comparison
+      </button>
+    </div>
   </div>
   <p>Launch multiple ticker runs and track them side-by-side.</p>
 </section>
@@ -52,6 +55,15 @@
         <span>Question</span>
         <textarea id="comparisonQuestion" name="question" rows="3" placeholder="Optional custom question"></textarea>
       </label>
+      <label>
+        <span>Template (optional)</span>
+        <select id="comparisonTemplate" name="template_id">
+          <option value="">No template</option>
+          {% for template in run_templates %}
+            <option value="{{ template.id }}">{{ template.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <p id="comparison-form-error" class="error-text hidden"></p>
       <div class="modal-actions">
         <button type="button" class="secondary-button compact-button" onclick="hideNewComparisonModal()">Cancel</button>
@@ -79,12 +91,18 @@
     const name = document.getElementById('comparisonName').value.trim();
     const tickersInput = document.getElementById('comparisonTickers').value;
     const question = document.getElementById('comparisonQuestion').value.trim();
+    const templateId = document.getElementById('comparisonTemplate').value;
     const tickers = tickersInput.split(',').map((ticker) => ticker.trim()).filter(Boolean);
 
     const response = await fetch('/api/comparisons', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, tickers, question: question || null })
+      body: JSON.stringify({
+        name,
+        tickers,
+        question: question || null,
+        template_id: templateId || null
+      })
     });
 
     if (!response.ok) {

@@ -2,16 +2,28 @@ use crate::{
     app_state::AppState,
     markdown::render_markdown,
     models::{EvaluatorOutput, EvidenceNoteRecord, Run, SourceRecord},
-    services::{comparison, critic, evaluator, planner, reader, search, synthesizer},
+    services::{batch, comparison, critic, evaluator, planner, reader, search, synthesizer},
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
 use tracing::{error, info};
 use url::Url;
 
+#[derive(Debug, thiserror::Error)]
+#[error("run cancelled")]
+struct RunCancelled;
+
 pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
     let result = execute_run_inner(state.clone(), &run_id).await;
     if let Err(error) = result {
+        if error.downcast_ref::<RunCancelled>().is_some() {
+            info!(%run_id, "run cancelled before completion");
+            let _ = state.db.set_run_status(&run_id, "cancelled").await;
+            let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
+            let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
+            return Ok(());
+        }
+
         error!(%run_id, error = %error, "run failed");
         let _ = state.db.set_run_status(&run_id, "failed").await;
         let _ = state
@@ -25,9 +37,11 @@ pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
             )
             .await;
         let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
+        let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
         return Err(error);
     }
     let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
+    let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
     Ok(())
 }
 
@@ -37,10 +51,12 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
         .get_run(run_id)
         .await?
         .ok_or_else(|| anyhow!("run not found: {run_id}"))?;
+    ensure_run_not_cancelled(&state, run_id).await?;
 
     info!(%run_id, ticker = %run.ticker, "starting run");
     state.db.set_run_status(run_id, "running").await?;
     let _ = comparison::sync_comparisons_for_run(&state, run_id).await;
+    let _ = batch::sync_batch_jobs_for_run(&state, run_id).await;
     state
         .db
         .insert_event(run_id, None, "run_started", "Research run started", None)
@@ -52,6 +68,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
     let mut latest_evaluation: Option<EvaluatorOutput> = None;
 
     for iteration_number in 1..=state.config.max_iterations as i64 {
+        ensure_run_not_cancelled(&state, run_id).await?;
         let iteration = state.db.create_iteration(run_id, iteration_number).await?;
         state
             .db
@@ -64,6 +81,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             )
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let plan = planner::build_plan(
             &state,
             &run.ticker,
@@ -89,6 +107,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             )
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let query_texts = search::generate_queries(
             &state,
             &run.ticker,
@@ -118,6 +137,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             )
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let ranked_results = search::search_and_rank(
             &state,
             &stored_queries,
@@ -170,6 +190,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             )
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let hydrated_sources =
             reader::hydrate_sources(&state, run_id, &iteration.id, &inserted_sources).await?;
         let note_inputs =
@@ -178,6 +199,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
         reader::persist_notes(&state.db, &iteration.id, &note_inputs).await?;
         let persisted_notes = state.db.list_evidence_notes(&iteration.id).await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         latest_draft = synthesizer::synthesize(
             &state,
             &run.ticker,
@@ -204,6 +226,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             )
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let critique_markdown = critic::critique(
             &state,
             &run.ticker,
@@ -218,6 +241,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             .update_iteration_critique(&iteration.id, &critique_markdown)
             .await?;
 
+        ensure_run_not_cancelled(&state, run_id).await?;
         let evaluation = evaluator::evaluate(
             &state,
             previous_draft.as_deref(),
@@ -260,6 +284,7 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
         latest_evaluation = Some(evaluation);
     }
 
+    ensure_run_not_cancelled(&state, run_id).await?;
     let final_html = render_markdown(&latest_draft);
     let summary = summarize_memo(&latest_draft);
     state
@@ -296,6 +321,18 @@ fn summarize_memo(markdown: &str) -> Option<String> {
         .skip(1)
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().to_string())
+}
+
+async fn ensure_run_not_cancelled(state: &AppState, run_id: &str) -> Result<()> {
+    let run = state
+        .db
+        .get_run(run_id)
+        .await?
+        .ok_or_else(|| anyhow!("run not found while checking status: {run_id}"))?;
+    if run.status == "cancelled" {
+        return Err(RunCancelled.into());
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]

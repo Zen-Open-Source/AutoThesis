@@ -1,0 +1,120 @@
+{% extends "layout.html" %}
+
+{% block title %}Batch Jobs - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>Batch research jobs</h1>
+    <button type="button" class="secondary-button compact-button" onclick="showNewBatchModal()">
+      New batch
+    </button>
+  </div>
+  <p>Queue many tickers at once and monitor a single consolidated job.</p>
+</section>
+
+<section class="panel">
+  <h2>Recent batches</h2>
+  {% if batch_jobs.len() == 0 %}
+    <p>No batch jobs yet.</p>
+    <button type="button" class="compact-button" onclick="showNewBatchModal()">
+      Create first batch
+    </button>
+  {% else %}
+    <div class="run-list">
+      {% for batch_job in batch_jobs %}
+        <a class="run-card comparison-card" href="/batches/{{ batch_job.id }}">
+          <div class="comparison-card-head">
+            <strong>{{ batch_job.name }}</strong>
+            <span class="badge badge-{{ batch_job.status }}">{{ batch_job.status }}</span>
+          </div>
+          <p>{{ batch_job.question_template }}</p>
+          {% if batch_job.summary.is_some() %}
+            <small>{{ batch_job.summary.as_ref().unwrap() }}</small>
+          {% else %}
+            <small>{{ batch_job.created_at }}</small>
+          {% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<div id="newBatchModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <h3>Create new batch job</h3>
+    <form id="batchForm" class="form-grid">
+      <label>
+        <span>Name</span>
+        <input type="text" id="batchName" name="name" required placeholder="FAANG weekly refresh" />
+      </label>
+      <label>
+        <span>Tickers (comma-separated)</span>
+        <input type="text" id="batchTickers" name="tickers" required placeholder="AAPL, MSFT, GOOGL, AMZN, META" />
+      </label>
+      <label>
+        <span>Question template (optional, supports {ticker})</span>
+        <textarea id="batchQuestionTemplate" name="question_template" rows="3" placeholder="What are the bull and bear cases for {ticker}?"></textarea>
+      </label>
+      <label>
+        <span>Saved template (optional)</span>
+        <select id="batchTemplateId" name="template_id">
+          <option value="">No template</option>
+          {% for template in run_templates %}
+            <option value="{{ template.id }}">{{ template.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p id="batch-form-error" class="error-text hidden"></p>
+      <div class="modal-actions">
+        <button type="button" class="secondary-button compact-button" onclick="hideNewBatchModal()">Cancel</button>
+        <button type="submit" class="compact-button">Create batch</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function showNewBatchModal() {
+    document.getElementById('newBatchModal').classList.remove('hidden');
+  }
+
+  function hideNewBatchModal() {
+    document.getElementById('newBatchModal').classList.add('hidden');
+  }
+
+  document.getElementById('batchForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorEl = document.getElementById('batch-form-error');
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+
+    const name = document.getElementById('batchName').value.trim();
+    const tickersInput = document.getElementById('batchTickers').value;
+    const questionTemplate = document.getElementById('batchQuestionTemplate').value.trim();
+    const templateId = document.getElementById('batchTemplateId').value;
+    const tickers = tickersInput.split(',').map((ticker) => ticker.trim()).filter(Boolean);
+
+    const response = await fetch('/api/batches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        tickers,
+        question_template: questionTemplate || null,
+        template_id: templateId || null
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to create batch' }));
+      errorEl.textContent = body.error || 'Failed to create batch';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const body = await response.json();
+    window.location.href = `/batches/${body.batch_job_id}`;
+  });
+</script>
+{% endblock %}

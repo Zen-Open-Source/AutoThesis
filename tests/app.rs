@@ -74,6 +74,7 @@ async fn create_run_endpoint_queues_and_completes_run() -> Result<()> {
                 .body(Body::from(serde_json::to_vec(&CreateRunRequest {
                     ticker: "nvda".to_string(),
                     question: None,
+                    template_id: None,
                 })?))?,
         )
         .await?;
@@ -104,6 +105,7 @@ async fn end_to_end_run_completes_three_iterations_and_persists_artifacts() -> R
                 .body(Body::from(serde_json::to_vec(&CreateRunRequest {
                     ticker: "NVDA".to_string(),
                     question: Some("What is the bull and bear case?".to_string()),
+                    template_id: None,
                 })?))?,
         )
         .await?;
@@ -182,6 +184,7 @@ async fn source_fetch_failure_is_recorded_and_run_still_completes() -> Result<()
                 .body(Body::from(serde_json::to_vec(&CreateRunRequest {
                     ticker: "AMZN".to_string(),
                     question: None,
+                    template_id: None,
                 })?))?,
         )
         .await?;
@@ -404,6 +407,216 @@ async fn bookmarks_and_source_annotations_endpoints_work() -> Result<()> {
         )
         .await?;
     assert_eq!(delete_bookmark_response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_template_crud_and_run_creation_work() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let create_template_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/run-templates")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Template A",
+                    "question_template": "What are the key risks for {ticker}?",
+                    "description": "risk template"
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_template_response.status(), StatusCode::OK);
+    let create_template_body = create_template_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let template_payload: Value = serde_json::from_slice(&create_template_body)?;
+    let template_id = template_payload["id"].as_str().expect("template id");
+
+    let create_run_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "ticker": "NVDA",
+                    "question": null,
+                    "template_id": template_id
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_run_response.status(), StatusCode::OK);
+    let create_run_body = create_run_response.into_body().collect().await?.to_bytes();
+    let run_payload: Value = serde_json::from_slice(&create_run_body)?;
+    let run_id = run_payload["run_id"].as_str().expect("run id");
+    let completed_run = wait_for_run_completion(&ctx.state, run_id).await?;
+    assert!(completed_run.question.contains("NVDA"));
+    assert!(completed_run.question.contains("key risks"));
+
+    let update_template_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/run-templates/{template_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Template A Updated",
+                    "question_template": "What catalysts matter most for {ticker}?",
+                    "description": "updated"
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(update_template_response.status(), StatusCode::OK);
+
+    let list_templates_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/run-templates")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(list_templates_response.status(), StatusCode::OK);
+    let list_templates_body = list_templates_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let templates_payload: Value = serde_json::from_slice(&list_templates_body)?;
+    assert_eq!(
+        templates_payload
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        1
+    );
+
+    let delete_template_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/run-templates/{template_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(delete_template_response.status(), StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_job_endpoint_creates_runs_and_reaches_terminal_state() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let create_batch_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/batches")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Tech Batch",
+                    "tickers": ["AAPL", "MSFT"],
+                    "question_template": "What matters most for {ticker} in the next 12 months?",
+                    "template_id": null
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_batch_response.status(), StatusCode::OK);
+    let create_batch_body = create_batch_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let batch_payload: Value = serde_json::from_slice(&create_batch_body)?;
+    let batch_job_id = batch_payload["batch_job_id"]
+        .as_str()
+        .expect("batch job id");
+
+    let batch_job = wait_for_batch_job_terminal(&ctx.state, batch_job_id).await?;
+    assert_eq!(batch_job.status, "completed");
+    assert!(batch_job.summary.is_some());
+
+    let get_batch_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/batches/{batch_job_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(get_batch_response.status(), StatusCode::OK);
+    let get_batch_body = get_batch_response.into_body().collect().await?.to_bytes();
+    let get_batch_payload: Value = serde_json::from_slice(&get_batch_body)?;
+    assert_eq!(
+        get_batch_payload["batch_job_runs"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_cancel_and_retry_controls_work() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let run = ctx
+        .state
+        .db
+        .create_run("NVDA", "Cancel and retry test")
+        .await?;
+
+    let cancel_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/runs/{}/cancel", run.id))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(cancel_response.status(), StatusCode::OK);
+    let cancelled_run = ctx
+        .state
+        .db
+        .get_run(&run.id)
+        .await?
+        .expect("cancelled run should exist");
+    assert_eq!(cancelled_run.status, "cancelled");
+
+    let retry_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/runs/{}/retry", run.id))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(retry_response.status(), StatusCode::OK);
+    let retried_run = wait_for_run_completion(&ctx.state, &run.id).await?;
+    assert_eq!(retried_run.status, "completed");
     Ok(())
 }
 
@@ -778,4 +991,25 @@ async fn wait_for_comparison_terminal(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Err(anyhow!("timed out waiting for comparison completion"))
+}
+
+async fn wait_for_batch_job_terminal(
+    state: &AppState,
+    batch_job_id: &str,
+) -> Result<autothesis::models::BatchJob> {
+    for _ in 0..100 {
+        let batch_job = state
+            .db
+            .get_batch_job(batch_job_id)
+            .await?
+            .expect("batch job exists while polling");
+        if batch_job.status == "completed"
+            || batch_job.status == "failed"
+            || batch_job.status == "failed_partial"
+        {
+            return Ok(batch_job);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(anyhow!("timed out waiting for batch completion"))
 }

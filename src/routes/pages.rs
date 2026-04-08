@@ -3,8 +3,8 @@ use crate::{
     error::{AppError, AppResult},
     markdown::render_markdown,
     models::{
-        Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run,
-        SearchQueryRecord, SourceRecord,
+        BatchJob, Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run,
+        RunTemplate, SearchQueryRecord, SourceRecord,
     },
 };
 use askama::Template;
@@ -17,15 +17,18 @@ use axum::{
 #[template(path = "index.html")]
 struct IndexTemplate {
     runs: Vec<Run>,
+    run_templates: Vec<RunTemplate>,
 }
 
 #[derive(Template)]
 #[template(path = "run.html")]
-struct RunTemplate {
+struct RunDetailTemplate {
     run: Run,
     events: Vec<EventRecord>,
     iterations: Vec<IterationSummary>,
     final_memo_html: Option<String>,
+    can_cancel: bool,
+    can_retry: bool,
 }
 
 #[derive(Clone)]
@@ -54,10 +57,18 @@ struct IterationTemplate {
 
 pub async fn index(State(state): State<AppState>) -> AppResult<Html<String>> {
     let runs = state.db.list_runs(10).await.map_err(AppError::from)?;
+    let run_templates = state
+        .db
+        .list_run_templates(200)
+        .await
+        .map_err(AppError::from)?;
     Ok(Html(
-        IndexTemplate { runs }
-            .render()
-            .map_err(|error| AppError::Internal(error.into()))?,
+        IndexTemplate {
+            runs,
+            run_templates,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
     ))
 }
 
@@ -84,8 +95,10 @@ pub async fn run_detail(
         .iter()
         .map(IterationSummary::from_iteration)
         .collect();
-    let html = RunTemplate {
+    let html = RunDetailTemplate {
         final_memo_html: run.final_memo_html.clone(),
+        can_cancel: run.status == "queued" || run.status == "running",
+        can_retry: run.status == "failed" || run.status == "cancelled",
         run,
         events,
         iterations,
@@ -174,11 +187,134 @@ pub async fn bookmarks_index(State(state): State<AppState>) -> AppResult<Html<St
     ))
 }
 
+#[derive(Template)]
+#[template(path = "run_templates.html")]
+struct RunTemplatesTemplate {
+    templates: Vec<RunTemplate>,
+}
+
+pub async fn run_templates_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let templates = state
+        .db
+        .list_run_templates(500)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Html(
+        RunTemplatesTemplate { templates }
+            .render()
+            .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
+#[derive(Template)]
+#[template(path = "batches.html")]
+struct BatchesTemplate {
+    batch_jobs: Vec<BatchJob>,
+    run_templates: Vec<RunTemplate>,
+}
+
+#[derive(Clone)]
+struct BatchRunView {
+    run_id: String,
+    has_run: bool,
+    ticker: String,
+    status: String,
+    has_summary: bool,
+    summary: String,
+}
+
+#[derive(Template)]
+#[template(path = "batch.html")]
+struct BatchTemplate {
+    batch_job: BatchJob,
+    batch_runs: Vec<BatchRunView>,
+    has_pending_runs: bool,
+}
+
+pub async fn batches_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let batch_jobs = state.db.list_batch_jobs(25).await.map_err(AppError::from)?;
+    let run_templates = state
+        .db
+        .list_run_templates(200)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Html(
+        BatchesTemplate {
+            batch_jobs,
+            run_templates,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
+pub async fn batch_detail(
+    Path(batch_job_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Html<String>> {
+    let batch_job = state
+        .db
+        .get_batch_job(&batch_job_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+    let batch_job_runs = state
+        .db
+        .list_batch_job_runs(&batch_job_id)
+        .await
+        .map_err(AppError::from)?;
+
+    let batch_runs: Vec<BatchRunView> = batch_job_runs
+        .into_iter()
+        .map(|batch_job_run| {
+            let run_id = batch_job_run
+                .run
+                .as_ref()
+                .map(|run| run.id.clone())
+                .unwrap_or_default();
+            let summary = batch_job_run
+                .run
+                .as_ref()
+                .and_then(|run| run.summary.clone())
+                .unwrap_or_default();
+            BatchRunView {
+                run_id,
+                has_run: batch_job_run.run.is_some(),
+                ticker: batch_job_run.ticker,
+                status: batch_job_run
+                    .run
+                    .as_ref()
+                    .map(|run| run.status.clone())
+                    .unwrap_or_else(|| "pending".to_string()),
+                has_summary: !summary.is_empty(),
+                summary,
+            }
+        })
+        .collect();
+    let has_pending_runs = batch_runs.iter().any(|run| {
+        run.status != "completed"
+            && run.status != "failed"
+            && run.status != "failed_partial"
+            && run.status != "cancelled"
+    });
+
+    Ok(Html(
+        BatchTemplate {
+            batch_job,
+            batch_runs,
+            has_pending_runs,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
 // Comparison templates
 #[derive(Template)]
 #[template(path = "comparisons.html")]
 struct ComparisonsTemplate {
     comparisons: Vec<crate::models::Comparison>,
+    run_templates: Vec<RunTemplate>,
 }
 
 #[derive(Clone)]
@@ -211,10 +347,18 @@ pub async fn comparisons_index(State(state): State<AppState>) -> AppResult<Html<
         .list_comparisons(25)
         .await
         .map_err(AppError::from)?;
+    let run_templates = state
+        .db
+        .list_run_templates(200)
+        .await
+        .map_err(AppError::from)?;
     Ok(Html(
-        ComparisonsTemplate { comparisons }
-            .render()
-            .map_err(|error| AppError::Internal(error.into()))?,
+        ComparisonsTemplate {
+            comparisons,
+            run_templates,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
     ))
 }
 
@@ -271,9 +415,9 @@ pub async fn comparison_detail(
             }
         })
         .collect();
-    let has_pending_runs = run_views
-        .iter()
-        .any(|run| run.status != "completed" && run.status != "failed");
+    let has_pending_runs = run_views.iter().any(|run| {
+        run.status != "completed" && run.status != "failed" && run.status != "cancelled"
+    });
 
     let html = ComparisonTemplate {
         comparison,

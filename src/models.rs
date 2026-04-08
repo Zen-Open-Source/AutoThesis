@@ -92,6 +92,7 @@ pub struct EventRecord {
 pub struct CreateRunRequest {
     pub ticker: String,
     pub question: Option<String>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +139,7 @@ pub struct CreateComparisonRequest {
     pub name: String,
     pub tickers: Vec<String>,
     pub question: Option<String>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +152,82 @@ pub struct CreateComparisonResponse {
 pub struct ComparisonDetail {
     pub comparison: Comparison,
     pub comparison_runs: Vec<ComparisonRunWithDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJob {
+    pub id: String,
+    pub name: String,
+    pub question_template: String,
+    pub status: String,
+    pub summary: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJobRun {
+    pub id: String,
+    pub batch_job_id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJobRunWithDetails {
+    pub id: String,
+    pub batch_job_id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub sort_order: i64,
+    pub created_at: DateTime<Utc>,
+    pub run: Option<Run>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchJobDetail {
+    pub batch_job: BatchJob,
+    pub batch_job_runs: Vec<BatchJobRunWithDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBatchJobRequest {
+    pub name: String,
+    pub tickers: Vec<String>,
+    pub question_template: Option<String>,
+    pub template_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBatchJobResponse {
+    pub batch_job_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunTemplate {
+    pub id: String,
+    pub name: String,
+    pub question_template: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRunTemplateRequest {
+    pub name: String,
+    pub question_template: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRunTemplateRequest {
+    pub name: String,
+    pub question_template: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ batch_job.name }} - Batch Job{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <div>
+      <h1>{{ batch_job.name }}</h1>
+      <p>{{ batch_job.question_template }}</p>
+    </div>
+    <a href="/batches">Back to batches</a>
+  </div>
+  <div class="meta-grid">
+    <div><strong>Status:</strong> <span class="badge badge-{{ batch_job.status }}">{{ batch_job.status }}</span></div>
+    <div><strong>Created:</strong> {{ batch_job.created_at }}</div>
+  </div>
+  {% if batch_job.summary.is_some() %}
+    <p>{{ batch_job.summary.as_ref().unwrap() }}</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Ticker runs</h2>
+  {% if batch_runs.len() == 0 %}
+    <p>No runs in this batch yet.</p>
+  {% else %}
+    <div class="comparison-grid">
+      {% for run in batch_runs %}
+        <article class="source-card">
+          <div class="comparison-run-head">
+            <h3>{{ run.ticker }}</h3>
+            <span class="badge badge-{{ run.status }}">{{ run.status }}</span>
+          </div>
+
+          {% if run.has_run %}
+            <p><a href="/runs/{{ run.run_id }}">Open run details</a></p>
+          {% endif %}
+
+          {% if run.has_summary %}
+            <p>{{ run.summary }}</p>
+          {% else %}
+            <p>Summary pending…</p>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+{% if has_pending_runs %}
+  <section class="panel">
+    <p>Batch is still running. This page auto-refreshes every 10 seconds.</p>
+  </section>
+{% endif %}
+
+<script>
+  const hasPendingRuns = {{ has_pending_runs }};
+  if (hasPendingRuns) {
+    setTimeout(() => window.location.reload(), 10000);
+  }
+</script>
+{% endblock %}

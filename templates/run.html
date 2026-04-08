@@ -6,16 +6,24 @@
 <section class="panel">
   <div class="panel-row">
     <h1>{{ run.ticker }}</h1>
-    <button
-      type="button"
-      class="secondary-button compact-button bookmark-button"
-      data-entity-type="run"
-      data-entity-id="{{ run.id }}"
-      data-title="{{ run.ticker }} run"
-      data-target-path="/runs/{{ run.id }}"
-    >
-      Bookmark run
-    </button>
+    <div class="comparison-actions">
+      <button
+        type="button"
+        class="secondary-button compact-button bookmark-button"
+        data-entity-type="run"
+        data-entity-id="{{ run.id }}"
+        data-title="{{ run.ticker }} run"
+        data-target-path="/runs/{{ run.id }}"
+      >
+        Bookmark run
+      </button>
+      {% if can_cancel %}
+        <button type="button" class="secondary-button compact-button" id="cancel-run-button">Cancel run</button>
+      {% endif %}
+      {% if can_retry %}
+        <button type="button" class="compact-button" id="retry-run-button">Retry run</button>
+      {% endif %}
+    </div>
   </div>
   <p id="run-bookmark-message" class="error-text hidden"></p>
   <div class="meta-grid">
@@ -73,6 +81,8 @@
   const finalMemoEl = document.getElementById('final-memo');
   const finalMemoPlaceholder = document.getElementById('final-memo-placeholder');
   const bookmarkMessage = document.getElementById('run-bookmark-message');
+  const cancelRunButton = document.getElementById('cancel-run-button');
+  const retryRunButton = document.getElementById('retry-run-button');
 
   function showBookmarkMessage(message, isError = false) {
     bookmarkMessage.textContent = message;
@@ -107,6 +117,28 @@
   document.querySelectorAll('.bookmark-button').forEach((button) => {
     button.addEventListener('click', () => saveBookmark(button));
   });
+
+  if (cancelRunButton) {
+    cancelRunButton.addEventListener('click', async () => {
+      const response = await fetch(`/api/runs/${runId}/cancel`, { method: 'POST' });
+      if (!response.ok) {
+        showBookmarkMessage('Failed to cancel run', true);
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  if (retryRunButton) {
+    retryRunButton.addEventListener('click', async () => {
+      const response = await fetch(`/api/runs/${runId}/retry`, { method: 'POST' });
+      if (!response.ok) {
+        showBookmarkMessage('Failed to retry run', true);
+        return;
+      }
+      window.location.reload();
+    });
+  }
 
   function renderEvents(events) {
     eventList.innerHTML = events.map((event) => `
@@ -156,7 +188,7 @@
       if (finalMemoPlaceholder) finalMemoPlaceholder.classList.add('hidden');
     }
 
-    if (run.status === 'completed' || run.status === 'failed') {
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
       clearInterval(window.runPoller);
     }
   }

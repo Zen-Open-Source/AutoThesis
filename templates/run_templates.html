@@ -1,0 +1,136 @@
+{% extends "layout.html" %}
+
+{% block title %}Run Templates - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <h1>Run templates</h1>
+  <p>Save reusable research prompts. Use <code>{ticker}</code> to inject each symbol automatically.</p>
+</section>
+
+<section class="panel">
+  <h2>Create template</h2>
+  <form id="create-template-form" class="form-grid">
+    <label>
+      <span>Name</span>
+      <input type="text" name="name" required placeholder="Valuation Deep Dive" />
+    </label>
+    <label>
+      <span>Question template</span>
+      <textarea name="question_template" rows="3" required placeholder="What would need to be true for {ticker}'s valuation to hold?"></textarea>
+    </label>
+    <label>
+      <span>Description</span>
+      <input type="text" name="description" placeholder="Optional notes" />
+    </label>
+    <p id="create-template-error" class="error-text hidden"></p>
+    <button type="submit" class="compact-button">Create template</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Existing templates</h2>
+  {% if templates.len() == 0 %}
+    <p>No templates yet.</p>
+  {% else %}
+    <div class="bookmark-list">
+      {% for template in templates %}
+        <article class="bookmark-card" id="template-{{ template.id }}">
+          <form class="template-update-form form-grid" data-template-id="{{ template.id }}">
+            <label>
+              <span>Name</span>
+              <input type="text" name="name" value="{{ template.name }}" required />
+            </label>
+            <label>
+              <span>Question template</span>
+              <textarea name="question_template" rows="3" required>{{ template.question_template }}</textarea>
+            </label>
+            <label>
+              <span>Description</span>
+              <input type="text" name="description" value="{{ template.description.as_deref().unwrap_or("") }}" />
+            </label>
+            <div class="modal-actions">
+              <button type="submit" class="compact-button">Save</button>
+              <button
+                type="button"
+                class="secondary-button compact-button template-delete"
+                data-template-id="{{ template.id }}"
+              >
+                Delete
+              </button>
+            </div>
+          </form>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<script>
+  const createForm = document.getElementById('create-template-form');
+  const createError = document.getElementById('create-template-error');
+
+  createForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    createError.classList.add('hidden');
+    createError.textContent = '';
+
+    const formData = new FormData(createForm);
+    const payload = {
+      name: (formData.get('name') || '').toString(),
+      question_template: (formData.get('question_template') || '').toString(),
+      description: ((formData.get('description') || '').toString().trim() || null)
+    };
+    const response = await fetch('/api/run-templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to create template' }));
+      createError.textContent = body.error || 'Failed to create template';
+      createError.classList.remove('hidden');
+      return;
+    }
+    window.location.reload();
+  });
+
+  document.querySelectorAll('.template-update-form').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const templateId = form.dataset.templateId;
+      const formData = new FormData(form);
+      const payload = {
+        name: (formData.get('name') || '').toString(),
+        question_template: (formData.get('question_template') || '').toString(),
+        description: ((formData.get('description') || '').toString().trim() || null)
+      };
+      const response = await fetch(`/api/run-templates/${templateId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        alert('Failed to update template');
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  document.querySelectorAll('.template-delete').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const templateId = button.dataset.templateId;
+      const response = await fetch(`/api/run-templates/${templateId}`, { method: 'DELETE' });
+      if (!response.ok) {
+        alert('Failed to delete template');
+        return;
+      }
+      const card = document.getElementById(`template-${templateId}`);
+      if (card) {
+        card.remove();
+      }
+    });
+  });
+</script>
+{% endblock %}

@@ -4,9 +4,12 @@
 
 {% block content %}
 <section class="panel hero">
-  <div class="flex justify-between items-start">
+  <div class="panel-row">
     <h1>Research a stock with a closed-loop memo engine</h1>
-    <a href="/comparisons" class="text-blue-600 hover:text-blue-800">View Comparisons</a>
+    <div class="comparison-actions">
+      <a href="/comparisons">View comparisons</a>
+      <a href="/batches">Batch runs</a>
+    </div>
   </div>
   <p>
     AutoThesis searches the web, extracts evidence, writes a memo, critiques itself, and repeats the process over multiple iterations.
@@ -15,6 +18,15 @@
     <label>
       <span>Ticker</span>
       <input type="text" name="ticker" value="NVDA" maxlength="12" required />
+    </label>
+    <label>
+      <span>Template (optional)</span>
+      <select name="template_id">
+        <option value="">No template</option>
+        {% for template in run_templates %}
+          <option value="{{ template.id }}">{{ template.name }}</option>
+        {% endfor %}
+      </select>
     </label>
     <label>
       <span>Question</span>
@@ -54,7 +66,8 @@
     const formData = new FormData(form);
     const payload = {
       ticker: formData.get('ticker'),
-      question: formData.get('question')
+      question: formData.get('question'),
+      template_id: formData.get('template_id') || null
     };
 
     const response = await fetch('/api/runs', {

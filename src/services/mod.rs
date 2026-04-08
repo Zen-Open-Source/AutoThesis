@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod comparison;
 pub mod critic;
 pub mod evaluator;
