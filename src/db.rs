@@ -1,8 +1,8 @@
 use crate::models::{
-    BatchJob, BatchJobRun, BatchJobRunWithDetails, Bookmark, Comparison, ComparisonRun,
+    AlertRule, BatchJob, BatchJobRun, BatchJobRunWithDetails, Bookmark, Comparison, ComparisonRun,
     ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord, Iteration, IterationDetail, Run,
-    RunTemplate, SearchQueryRecord, SearchResultRecord, SourceAnnotation, SourceRecord, Watchlist,
-    WatchlistTicker,
+    RunTemplate, ScanOpportunity, ScanRun, ScannerConfig, SearchQueryRecord, SearchResultRecord,
+    SourceAnnotation, SourceRecord, ThesisAlert, TickerUniverse, Watchlist, WatchlistTicker,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -14,6 +14,10 @@ use uuid::Uuid;
 pub struct Database {
     database_url: String,
 }
+
+const ALERT_RULE_SCORE_DROP: &str = "score_drop";
+const ALERT_RULE_FRESHNESS_STALE: &str = "freshness_stale";
+const ALERT_RULE_DECISION_DOWNGRADE: &str = "decision_downgrade";
 
 impl Database {
     pub async fn connect(database_url: &str) -> Result<Self> {
@@ -1439,6 +1443,155 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub async fn list_watchlist_ids_for_ticker(&self, ticker: &str) -> Result<Vec<String>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT watchlist_id FROM watchlist_tickers WHERE ticker = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = statement.query_map([ticker], |row| row.get::<_, String>(0))?;
+        collect_rows(rows)
+    }
+
+    pub async fn list_or_create_alert_rules(&self, watchlist_id: &str) -> Result<Vec<AlertRule>> {
+        let rules = self.list_alert_rules(watchlist_id).await?;
+        if !rules.is_empty() {
+            return Ok(rules);
+        }
+
+        self.create_alert_rule(watchlist_id, ALERT_RULE_SCORE_DROP, Some(0.8), true)
+            .await?;
+        self.create_alert_rule(watchlist_id, ALERT_RULE_FRESHNESS_STALE, None, true)
+            .await?;
+        self.create_alert_rule(watchlist_id, ALERT_RULE_DECISION_DOWNGRADE, None, true)
+            .await?;
+        self.list_alert_rules(watchlist_id).await
+    }
+
+    pub async fn list_alert_rules(&self, watchlist_id: &str) -> Result<Vec<AlertRule>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn
+            .prepare("SELECT * FROM alert_rules WHERE watchlist_id = ?1 ORDER BY created_at ASC")?;
+        let rows = statement.query_map([watchlist_id], map_alert_rule)?;
+        collect_rows(rows)
+    }
+
+    async fn create_alert_rule(
+        &self,
+        watchlist_id: &str,
+        rule_type: &str,
+        threshold: Option<f64>,
+        enabled: bool,
+    ) -> Result<AlertRule> {
+        let rule = AlertRule {
+            id: Uuid::new_v4().to_string(),
+            watchlist_id: watchlist_id.to_string(),
+            rule_type: rule_type.to_string(),
+            threshold,
+            enabled,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO alert_rules (id, watchlist_id, rule_type, threshold, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                rule.id,
+                rule.watchlist_id,
+                rule.rule_type,
+                rule.threshold,
+                if rule.enabled { 1 } else { 0 },
+                encode_time(rule.created_at),
+                encode_time(rule.updated_at),
+            ],
+        )?;
+
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM alert_rules WHERE watchlist_id = ?1 AND rule_type = ?2 LIMIT 1",
+            params![watchlist_id, rule_type],
+            map_alert_rule,
+        )
+        .optional()?
+        .context("created alert rule missing after insert")
+    }
+
+    pub async fn list_thesis_alerts(
+        &self,
+        watchlist_id: &str,
+        status: Option<&str>,
+    ) -> Result<Vec<ThesisAlert>> {
+        let conn = self.open_connection()?;
+        if let Some(status) = status {
+            let mut statement = conn.prepare(
+                "SELECT * FROM thesis_alerts
+                 WHERE watchlist_id = ?1 AND status = ?2
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = statement.query_map(params![watchlist_id, status], map_thesis_alert)?;
+            return collect_rows(rows);
+        }
+
+        let mut statement = conn.prepare(
+            "SELECT * FROM thesis_alerts
+             WHERE watchlist_id = ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = statement.query_map([watchlist_id], map_thesis_alert)?;
+        collect_rows(rows)
+    }
+
+    pub async fn create_thesis_alert_if_absent(
+        &self,
+        watchlist_id: &str,
+        ticker: &str,
+        run_id: &str,
+        alert_type: &str,
+        severity: &str,
+        message: &str,
+    ) -> Result<ThesisAlert> {
+        let alert_id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO thesis_alerts
+             (id, watchlist_id, ticker, run_id, alert_type, severity, message, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                alert_id,
+                watchlist_id,
+                ticker,
+                run_id,
+                alert_type,
+                severity,
+                message,
+                "active",
+                encode_time(now),
+                encode_time(now),
+            ],
+        )?;
+
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM thesis_alerts
+             WHERE watchlist_id = ?1 AND ticker = ?2 AND alert_type = ?3 AND run_id = ?4
+             LIMIT 1",
+            params![watchlist_id, ticker, alert_type, run_id],
+            map_thesis_alert,
+        )
+        .optional()?
+        .context("thesis alert missing after insert")
+    }
+
+    pub async fn update_thesis_alert_status(&self, alert_id: &str, status: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "UPDATE thesis_alerts SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, encode_time(Utc::now()), alert_id],
+        )?;
+        Ok(affected > 0)
+    }
+
     pub async fn add_ticker_to_watchlist(
         &self,
         watchlist_id: &str,
@@ -1528,6 +1681,397 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    // Scanner database methods
+
+    pub async fn upsert_ticker_universe(
+        &self,
+        ticker: &str,
+        name: Option<&str>,
+        sector: Option<&str>,
+        industry: Option<&str>,
+        market_cap_billion: Option<f64>,
+        is_sp500: bool,
+    ) -> Result<TickerUniverse> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO ticker_universe (id, ticker, name, sector, industry, market_cap_billion, is_sp500, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)
+             ON CONFLICT(ticker) DO UPDATE SET
+               name = excluded.name,
+               sector = excluded.sector,
+               industry = excluded.industry,
+               market_cap_billion = excluded.market_cap_billion,
+               is_sp500 = excluded.is_sp500,
+               updated_at = excluded.updated_at",
+            params![
+                id,
+                ticker,
+                name,
+                sector,
+                industry,
+                market_cap_billion,
+                if is_sp500 { 1 } else { 0 },
+                encode_time(now),
+                encode_time(now),
+            ],
+        )?;
+
+        self.get_ticker_universe(ticker)
+            .await?
+            .context("ticker universe entry missing after upsert")
+    }
+
+    pub async fn get_ticker_universe(&self, ticker: &str) -> Result<Option<TickerUniverse>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM ticker_universe WHERE ticker = ?1",
+            [ticker],
+            map_ticker_universe,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_ticker_universe(
+        &self,
+        active_only: bool,
+        sector_filter: Option<&str>,
+        min_market_cap: Option<f64>,
+        max_market_cap: Option<f64>,
+    ) -> Result<Vec<TickerUniverse>> {
+        let conn = self.open_connection()?;
+        let mut sql = "SELECT * FROM ticker_universe WHERE 1=1".to_string();
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if active_only {
+            sql.push_str(" AND is_active = 1");
+        }
+        if let Some(sector) = sector_filter {
+            sql.push_str(" AND sector = ?");
+            params_vec.push(Box::new(sector.to_string()));
+        }
+        if let Some(min) = min_market_cap {
+            sql.push_str(" AND market_cap_billion >= ?");
+            params_vec.push(Box::new(min));
+        }
+        if let Some(max) = max_market_cap {
+            sql.push_str(" AND market_cap_billion <= ?");
+            params_vec.push(Box::new(max));
+        }
+        sql.push_str(" ORDER BY ticker ASC");
+
+        let params: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), map_ticker_universe)?;
+        collect_rows(rows)
+    }
+
+    pub async fn count_ticker_universe(&self, active_only: bool) -> Result<i64> {
+        let conn = self.open_connection()?;
+        let count = if active_only {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ticker_universe WHERE is_active = 1",
+                [],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row("SELECT COUNT(*) FROM ticker_universe", [], |row| row.get(0))?
+        };
+        Ok(count)
+    }
+
+    pub async fn set_ticker_universe_active(&self, ticker: &str, is_active: bool) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "UPDATE ticker_universe SET is_active = ?1, updated_at = ?2 WHERE ticker = ?3",
+            params![
+                if is_active { 1 } else { 0 },
+                encode_time(Utc::now()),
+                ticker
+            ],
+        )?;
+        Ok(affected > 0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_scanner_config(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        universe_filter: &str,
+        sector_filter: Option<&str>,
+        min_market_cap: Option<f64>,
+        max_market_cap: Option<f64>,
+        max_opportunities: i64,
+        signal_weights_json: Option<&str>,
+    ) -> Result<ScannerConfig> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO scanner_configs
+             (id, name, description, universe_filter, sector_filter, min_market_cap, max_market_cap, max_opportunities, signal_weights_json, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11)",
+            params![
+                id,
+                name,
+                description,
+                universe_filter,
+                sector_filter,
+                min_market_cap,
+                max_market_cap,
+                max_opportunities,
+                signal_weights_json,
+                encode_time(now),
+                encode_time(now),
+            ],
+        )?;
+
+        self.get_scanner_config(&id)
+            .await?
+            .context("scanner config missing after insert")
+    }
+
+    pub async fn get_scanner_config(&self, config_id: &str) -> Result<Option<ScannerConfig>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM scanner_configs WHERE id = ?1",
+            [config_id],
+            map_scanner_config,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn get_default_scanner_config(&self) -> Result<Option<ScannerConfig>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM scanner_configs WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1",
+            [],
+            map_scanner_config,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_scanner_configs(&self) -> Result<Vec<ScannerConfig>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM scanner_configs ORDER BY created_at ASC")?;
+        let rows = statement.query_map([], map_scanner_config)?;
+        collect_rows(rows)
+    }
+
+    pub async fn create_scan_run(&self, config_id: Option<&str>) -> Result<ScanRun> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO scan_runs (id, config_id, status, tickers_scanned, opportunities_found, created_at, updated_at)
+             VALUES (?1, ?2, 'queued', 0, 0, ?3, ?4)",
+            params![id, config_id, encode_time(now), encode_time(now)],
+        )?;
+
+        self.get_scan_run(&id)
+            .await?
+            .context("scan run missing after insert")
+    }
+
+    pub async fn get_scan_run(&self, scan_run_id: &str) -> Result<Option<ScanRun>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM scan_runs WHERE id = ?1",
+            [scan_run_id],
+            map_scan_run,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn set_scan_run_status(&self, scan_run_id: &str, status: &str) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute(
+            "UPDATE scan_runs SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, encode_time(Utc::now()), scan_run_id],
+        )?;
+        Ok(())
+    }
+
+    pub async fn update_scan_run_progress(
+        &self,
+        scan_run_id: &str,
+        tickers_scanned: i64,
+        opportunities_found: i64,
+    ) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute(
+            "UPDATE scan_runs SET tickers_scanned = ?1, opportunities_found = ?2, updated_at = ?3 WHERE id = ?4",
+            params![
+                tickers_scanned,
+                opportunities_found,
+                encode_time(Utc::now()),
+                scan_run_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn complete_scan_run(
+        &self,
+        scan_run_id: &str,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.open_connection()?;
+        let status = if error_message.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        conn.execute(
+            "UPDATE scan_runs SET status = ?1, completed_at = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?5",
+            params![
+                status,
+                encode_time(Utc::now()),
+                error_message,
+                encode_time(Utc::now()),
+                scan_run_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn list_scan_runs(&self, limit: i64) -> Result<Vec<ScanRun>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM scan_runs ORDER BY created_at DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_scan_run)?;
+        collect_rows(rows)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_scan_opportunity(
+        &self,
+        scan_run_id: &str,
+        ticker: &str,
+        overall_score: f64,
+        signal_strength_score: f64,
+        thesis_quality_score: Option<f64>,
+        coverage_gap_score: f64,
+        timing_score: f64,
+        signals_json: &str,
+        preliminary_thesis_markdown: Option<&str>,
+        preliminary_thesis_html: Option<&str>,
+        key_catalysts: Option<&str>,
+        risk_factors: Option<&str>,
+    ) -> Result<ScanOpportunity> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO scan_opportunities
+             (id, scan_run_id, ticker, overall_score, signal_strength_score, thesis_quality_score, coverage_gap_score, timing_score, signals_json, preliminary_thesis_markdown, preliminary_thesis_html, key_catalysts, risk_factors, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'new', ?14, ?15)",
+            params![
+                id,
+                scan_run_id,
+                ticker,
+                overall_score,
+                signal_strength_score,
+                thesis_quality_score,
+                coverage_gap_score,
+                timing_score,
+                signals_json,
+                preliminary_thesis_markdown,
+                preliminary_thesis_html,
+                key_catalysts,
+                risk_factors,
+                encode_time(now),
+                encode_time(now),
+            ],
+        )?;
+
+        self.get_scan_opportunity(&id)
+            .await?
+            .context("scan opportunity missing after insert")
+    }
+
+    pub async fn get_scan_opportunity(
+        &self,
+        opportunity_id: &str,
+    ) -> Result<Option<ScanOpportunity>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM scan_opportunities WHERE id = ?1",
+            [opportunity_id],
+            map_scan_opportunity,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_scan_opportunities_for_run(
+        &self,
+        scan_run_id: &str,
+    ) -> Result<Vec<ScanOpportunity>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM scan_opportunities WHERE scan_run_id = ?1 ORDER BY overall_score DESC",
+        )?;
+        let rows = statement.query_map([scan_run_id], map_scan_opportunity)?;
+        collect_rows(rows)
+    }
+
+    pub async fn list_top_scan_opportunities(&self, limit: i64) -> Result<Vec<ScanOpportunity>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM scan_opportunities
+             WHERE status = 'new'
+             ORDER BY overall_score DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit], map_scan_opportunity)?;
+        collect_rows(rows)
+    }
+
+    pub async fn promote_scan_opportunity(
+        &self,
+        opportunity_id: &str,
+        run_id: &str,
+    ) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "UPDATE scan_opportunities SET promoted_to_run_id = ?1, status = 'promoted', updated_at = ?2 WHERE id = ?3",
+            params![run_id, encode_time(Utc::now()), opportunity_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn dismiss_scan_opportunity(&self, opportunity_id: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute(
+            "UPDATE scan_opportunities SET status = 'dismissed', updated_at = ?1 WHERE id = ?2",
+            params![encode_time(Utc::now()), opportunity_id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub async fn seed_sp500_universe(&self) -> Result<i64> {
+        let count = self.count_ticker_universe(false).await?;
+        if count > 0 {
+            return Ok(0);
+        }
+
+        let seed_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql/seed_sp500.sql");
+        let seed_sql =
+            fs::read_to_string(&seed_path).context("failed to read S&P 500 seed file")?;
+        let conn = self.open_connection()?;
+        conn.execute_batch(&seed_sql)?;
+
+        self.count_ticker_universe(false).await
+    }
 }
 
 fn map_comparison(row: &Row<'_>) -> rusqlite::Result<Comparison> {
@@ -1561,6 +2105,33 @@ fn map_run_template(row: &Row<'_>) -> rusqlite::Result<RunTemplate> {
         name: row.get("name")?,
         question_template: row.get("question_template")?,
         description: row.get("description")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_alert_rule(row: &Row<'_>) -> rusqlite::Result<AlertRule> {
+    Ok(AlertRule {
+        id: row.get("id")?,
+        watchlist_id: row.get("watchlist_id")?,
+        rule_type: row.get("rule_type")?,
+        threshold: row.get("threshold")?,
+        enabled: row.get::<_, i64>("enabled")? > 0,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_thesis_alert(row: &Row<'_>) -> rusqlite::Result<ThesisAlert> {
+    Ok(ThesisAlert {
+        id: row.get("id")?,
+        watchlist_id: row.get("watchlist_id")?,
+        ticker: row.get("ticker")?,
+        run_id: row.get("run_id")?,
+        alert_type: row.get("alert_type")?,
+        severity: row.get("severity")?,
+        message: row.get("message")?,
+        status: row.get("status")?,
         created_at: parse_time(row.get("created_at")?)?,
         updated_at: parse_time(row.get("updated_at")?)?,
     })
@@ -1606,6 +2177,79 @@ fn map_source_annotation(row: &Row<'_>) -> rusqlite::Result<SourceAnnotation> {
         selected_text: row.get("selected_text")?,
         annotation_markdown: row.get("annotation_markdown")?,
         tag: row.get("tag")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_ticker_universe(row: &Row<'_>) -> rusqlite::Result<TickerUniverse> {
+    Ok(TickerUniverse {
+        id: row.get("id")?,
+        ticker: row.get("ticker")?,
+        name: row.get("name")?,
+        sector: row.get("sector")?,
+        industry: row.get("industry")?,
+        market_cap_billion: row.get("market_cap_billion")?,
+        is_sp500: row.get::<_, i64>("is_sp500")? > 0,
+        is_active: row.get::<_, i64>("is_active")? > 0,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_scanner_config(row: &Row<'_>) -> rusqlite::Result<ScannerConfig> {
+    Ok(ScannerConfig {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        description: row.get("description")?,
+        universe_filter: row.get("universe_filter")?,
+        sector_filter: row.get("sector_filter")?,
+        min_market_cap: row.get("min_market_cap")?,
+        max_market_cap: row.get("max_market_cap")?,
+        max_opportunities: row.get("max_opportunities")?,
+        signal_weights_json: row.get("signal_weights_json")?,
+        is_active: row.get::<_, i64>("is_active")? > 0,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_scan_run(row: &Row<'_>) -> rusqlite::Result<ScanRun> {
+    Ok(ScanRun {
+        id: row.get("id")?,
+        config_id: row.get("config_id")?,
+        status: row.get("status")?,
+        tickers_scanned: row.get("tickers_scanned")?,
+        opportunities_found: row.get("opportunities_found")?,
+        started_at: row
+            .get::<_, Option<String>>("started_at")?
+            .and_then(|s| parse_time(s).ok()),
+        completed_at: row
+            .get::<_, Option<String>>("completed_at")?
+            .and_then(|s| parse_time(s).ok()),
+        error_message: row.get("error_message")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_scan_opportunity(row: &Row<'_>) -> rusqlite::Result<ScanOpportunity> {
+    Ok(ScanOpportunity {
+        id: row.get("id")?,
+        scan_run_id: row.get("scan_run_id")?,
+        ticker: row.get("ticker")?,
+        overall_score: row.get("overall_score")?,
+        signal_strength_score: row.get("signal_strength_score")?,
+        thesis_quality_score: row.get("thesis_quality_score")?,
+        coverage_gap_score: row.get("coverage_gap_score")?,
+        timing_score: row.get("timing_score")?,
+        signals_json: row.get("signals_json")?,
+        preliminary_thesis_markdown: row.get("preliminary_thesis_markdown")?,
+        preliminary_thesis_html: row.get("preliminary_thesis_html")?,
+        key_catalysts: row.get("key_catalysts")?,
+        risk_factors: row.get("risk_factors")?,
+        promoted_to_run_id: row.get("promoted_to_run_id")?,
+        status: row.get("status")?,
         created_at: parse_time(row.get("created_at")?)?,
         updated_at: parse_time(row.get("updated_at")?)?,
     })

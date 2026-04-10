@@ -1,0 +1,162 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ opportunity.ticker }} Opportunity - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>{{ opportunity.ticker }} opportunity</h1>
+    <a href="/scanner">Back to scanner</a>
+  </div>
+  <p>Preliminary thesis opportunity detected by the scanner.</p>
+</section>
+
+<section class="panel">
+  <h2>Opportunity scores</h2>
+  <div class="meta-grid">
+    <div><strong>Overall score:</strong> {{ opportunity.overall_score_text }}</div>
+    <div><strong>Signal strength:</strong> {{ opportunity.signal_strength_text }}</div>
+    <div><strong>Thesis quality:</strong> {{ opportunity.thesis_quality_text }}</div>
+    <div><strong>Coverage gap:</strong> {{ opportunity.coverage_gap_text }}</div>
+    <div><strong>Timing score:</strong> {{ opportunity.timing_score_text }}</div>
+    <div><strong>Status:</strong> <span class="badge badge-{{ opportunity.status }}">{{ opportunity.status }}</span></div>
+  </div>
+
+  {% if has_ticker_name %}
+    <p><strong>Company:</strong> {{ ticker_name }}</p>
+  {% endif %}
+  {% if has_ticker_sector %}
+    <p><strong>Sector:</strong> {{ ticker_sector }}</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Detected signals</h2>
+  {% if signals.len() == 0 %}
+    <p>No signals detected.</p>
+  {% else %}
+    <div class="dashboard-grid">
+      {% for signal in signals %}
+        <article class="source-card">
+          <div class="comparison-card-head">
+            <h3>{{ signal.signal_type }}</h3>
+            <span class="badge">Strength: {{ signal.strength_text }}</span>
+          </div>
+          <p>{{ signal.description }}</p>
+          {% if signal.evidence.len() > 0 %}
+            <div class="evidence-list">
+              <strong>Evidence:</strong>
+              <ul>
+                {% for evidence in signal.evidence %}
+                  <li>{{ evidence }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+{% if has_thesis %}
+<section class="panel">
+  <h2>Preliminary thesis</h2>
+  <article class="memo-container">
+    {{ thesis_html }}
+  </article>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Actions</h2>
+  {% if opportunity.has_promoted_run %}
+    <div class="meta-grid">
+      <div><strong>Promoted to run:</strong> <a href="/runs/{{ opportunity.promoted_to_run_id }}">{{ opportunity.promoted_to_run_id }}</a></div>
+    </div>
+    {% if has_existing_run %}
+      <p>Research run status: <span class="badge badge-{{ existing_run_status }}">{{ existing_run_status }}</span></p>
+      <div class="comparison-actions">
+        <a href="/runs/{{ existing_run_id }}">View research run</a>
+      </div>
+    {% endif %}
+  {% else %}
+    <p>Promote this opportunity to a full research run for deeper analysis.</p>
+    <form id="promote-form" class="form-grid">
+      <label>
+        <span>Custom question (optional)</span>
+        <input type="text" name="question" placeholder="What is the bull and bear case for {{ opportunity.ticker }}?" />
+      </label>
+      <button type="submit" class="compact-button">Promote to research run</button>
+    </form>
+    <p id="promote-error" class="error-text hidden"></p>
+
+    <div class="comparison-actions" style="margin-top: 1rem;">
+      <button type="button" id="dismiss-button" class="secondary-button compact-button">Dismiss opportunity</button>
+    </div>
+  {% endif %}
+</section>
+
+<script>
+  const opportunityId = '{{ opportunity.id }}';
+  const promoteForm = document.getElementById('promote-form');
+  const promoteError = document.getElementById('promote-error');
+  const dismissButton = document.getElementById('dismiss-button');
+
+  if (promoteForm) {
+    promoteForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      promoteError.classList.add('hidden');
+      promoteError.textContent = '';
+
+      const formData = new FormData(promoteForm);
+      const question = formData.get('question') || null;
+      const payload = question ? { question } : {};
+
+      try {
+        const response = await fetch(`/api/scanner/opportunities/${encodeURIComponent(opportunityId)}/promote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({ error: 'Failed to promote opportunity' }));
+          promoteError.textContent = body.error || 'Failed to promote opportunity';
+          promoteError.classList.remove('hidden');
+          return;
+        }
+
+        const body = await response.json();
+        window.location.href = `/runs/${body.run_id}`;
+      } catch (error) {
+        promoteError.textContent = 'Failed to promote opportunity';
+        promoteError.classList.remove('hidden');
+      }
+    });
+  }
+
+  if (dismissButton) {
+    dismissButton.addEventListener('click', async () => {
+      if (!confirm('Dismiss this opportunity?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/scanner/opportunities/${encodeURIComponent(opportunityId)}/dismiss`, {
+          method: 'POST'
+        });
+
+        if (!response.ok) {
+          alert('Failed to dismiss opportunity');
+          return;
+        }
+
+        window.location.href = '/scanner';
+      } catch (error) {
+        alert('Failed to dismiss opportunity');
+      }
+    });
+  }
+</script>
+{% endblock %}

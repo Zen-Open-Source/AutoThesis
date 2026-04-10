@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod batches;
 pub mod bookmarks;
 pub mod comparisons;
@@ -5,6 +6,7 @@ pub mod health;
 pub mod pages;
 pub mod run_templates;
 pub mod runs;
+pub mod scanner;
 pub mod watchlists;
 
 use crate::app_state::AppState;
@@ -29,6 +31,11 @@ pub fn router(state: AppState) -> Router {
         .route("/dashboard", get(pages::dashboard_index))
         .route("/bookmarks", get(pages::bookmarks_index))
         .route("/templates", get(pages::run_templates_index))
+        .route("/scanner", get(pages::scanner_index))
+        .route(
+            "/scanner/opportunities/:id",
+            get(pages::scanner_opportunity_detail),
+        )
         .route("/healthz", get(health::healthz))
         .route("/api/runs", post(runs::create_run).get(runs::list_runs))
         .route("/api/runs/:id", get(runs::get_run))
@@ -72,6 +79,9 @@ pub fn router(state: AppState) -> Router {
             "/api/watchlists/:id/tickers/:ticker",
             axum::routing::delete(watchlists::remove_watchlist_ticker),
         )
+        .route("/api/alerts", get(alerts::list_alerts))
+        .route("/api/alerts/:id/dismiss", post(alerts::dismiss_alert))
+        .route("/api/alerts/:id/snooze", post(alerts::snooze_alert))
         .route("/api/dashboard", get(watchlists::get_dashboard))
         .route(
             "/api/dashboard/refresh",
@@ -96,6 +106,28 @@ pub fn router(state: AppState) -> Router {
             get(bookmarks::list_source_annotations)
                 .post(bookmarks::create_source_annotation)
                 .delete(bookmarks::delete_source_annotation),
+        )
+        .route("/api/scanner", get(scanner::get_scanner_dashboard))
+        .route(
+            "/api/scanner/runs",
+            post(scanner::create_scan_run).get(scanner::list_scan_runs),
+        )
+        .route("/api/scanner/runs/:id", get(scanner::get_scan_run))
+        .route(
+            "/api/scanner/opportunities/:id",
+            get(scanner::get_scan_opportunity),
+        )
+        .route(
+            "/api/scanner/opportunities/:id/promote",
+            post(scanner::promote_opportunity),
+        )
+        .route(
+            "/api/scanner/opportunities/:id/dismiss",
+            post(scanner::dismiss_opportunity),
+        )
+        .route(
+            "/api/scanner/universe",
+            get(scanner::list_ticker_universe).post(scanner::add_ticker_to_universe),
         )
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())

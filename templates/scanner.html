@@ -1,0 +1,124 @@
+{% extends "layout.html" %}
+
+{% block title %}Thesis Scanner - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>Thesis scanner</h1>
+    <a href="/">Back to home</a>
+  </div>
+  <p>Automatically scan the market for thesis opportunities. Discover tickers with catalysts, coverage gaps, and timing signals.</p>
+</section>
+
+<section class="panel">
+  <h2>Scan control</h2>
+  <div class="meta-grid">
+    <div><strong>Tickers in universe:</strong> {{ total_tickers_in_universe }}</div>
+  </div>
+
+  {% if has_latest_scan_run %}
+    <div class="meta-grid">
+      <div><strong>Last scan status:</strong> <span class="badge badge-{{ latest_scan_run_status }}">{{ latest_scan_run_status }}</span></div>
+      <div><strong>Tickers scanned:</strong> {{ latest_scan_run_tickers_scanned }}</div>
+      <div><strong>Opportunities found:</strong> {{ latest_scan_run_opportunities_found }}</div>
+      <div><strong>Started:</strong> {{ latest_scan_run_started_at_text }}</div>
+      {% if has_latest_scan_run_completed_at %}
+        <div><strong>Completed:</strong> {{ latest_scan_run_completed_at_text }}</div>
+      {% endif %}
+    </div>
+    {% if has_latest_scan_run_error %}
+      <p class="error-text">Error: {{ latest_scan_run_error_message }}</p>
+    {% endif %}
+  {% else %}
+    <p>No scans have been run yet. Start your first scan below.</p>
+  {% endif %}
+
+  <div class="comparison-actions">
+    <button type="button" id="start-scan-button" class="compact-button" {% if has_scan_running %}disabled{% endif %}>
+      {% if has_scan_running %}
+        Scan in progress...
+      {% else %}
+        Start scan
+      {% endif %}
+    </button>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Top opportunities</h2>
+  {% if top_opportunities.len() == 0 %}
+    <p>No opportunities found yet. Run a scan to discover thesis candidates.</p>
+  {% else %}
+    <div class="dashboard-grid">
+      {% for opp in top_opportunities %}
+        <article class="source-card dashboard-card" data-status="{{ opp.status }}">
+          <div class="comparison-card-head">
+            <h3>{{ opp.ticker }}</h3>
+            <div class="comparison-actions">
+              <span class="badge badge-{{ opp.status }}">{{ opp.status }}</span>
+              {% if opp.has_promoted_run %}
+                <span class="badge badge-promoted">promoted</span>
+              {% endif %}
+            </div>
+          </div>
+          <div class="meta-grid">
+            <div><strong>Overall:</strong> {{ opp.overall_score_text }}</div>
+            <div><strong>Signals:</strong> {{ opp.signal_strength_text }}</div>
+            <div><strong>Coverage:</strong> {{ opp.coverage_gap_text }}</div>
+            <div><strong>Timing:</strong> {{ opp.timing_score_text }}</div>
+          </div>
+          {% if opp.has_key_catalysts %}
+            <p><strong>Catalysts:</strong> {{ opp.key_catalysts }}</p>
+          {% endif %}
+          {% if opp.has_risk_factors %}
+            <p><strong>Risks:</strong> {{ opp.risk_factors }}</p>
+          {% endif %}
+          <div class="comparison-actions">
+            <a href="/scanner/opportunities/{{ opp.id }}">View details</a>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<script>
+  const hasScanRunning = {{ has_scan_running }};
+
+  if (hasScanRunning) {
+    setTimeout(() => window.location.reload(), 10000);
+  }
+
+  const startScanButton = document.getElementById('start-scan-button');
+  if (startScanButton) {
+    startScanButton.addEventListener('click', async () => {
+      startScanButton.disabled = true;
+      startScanButton.textContent = 'Starting scan...';
+
+      try {
+        const response = await fetch('/api/scanner/runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({ error: 'Failed to start scan' }));
+          alert(body.error || 'Failed to start scan');
+          startScanButton.disabled = false;
+          startScanButton.textContent = 'Start scan';
+          return;
+        }
+
+        startScanButton.textContent = 'Scan started...';
+        setTimeout(() => window.location.reload(), 2000);
+      } catch (error) {
+        alert('Failed to start scan');
+        startScanButton.disabled = false;
+        startScanButton.textContent = 'Start scan';
+      }
+    });
+  }
+</script>
+{% endblock %}

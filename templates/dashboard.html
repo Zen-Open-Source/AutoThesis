@@ -64,6 +64,45 @@
 
 {% if has_selected_watchlist %}
   <section class="panel">
+    <h2>Active alerts</h2>
+    {% if active_alerts.len() == 0 %}
+      <p>No active alerts right now.</p>
+    {% else %}
+      <div class="alert-list">
+        {% for alert in active_alerts %}
+          <article class="source-card">
+            <div class="comparison-card-head">
+              <h3>{{ alert.ticker }}</h3>
+              <div class="comparison-actions">
+                <span class="badge badge-severity-{{ alert.severity }}">{{ alert.severity }}</span>
+                <span class="badge badge-alert-type">{{ alert.alert_type }}</span>
+              </div>
+            </div>
+            <p>{{ alert.message }}</p>
+            <p><small>Created: {{ alert.created_at_text }}</small></p>
+            <div class="comparison-actions">
+              <button
+                type="button"
+                class="secondary-button compact-button dismiss-alert"
+                data-alert-id="{{ alert.id }}"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                class="secondary-button compact-button snooze-alert"
+                data-alert-id="{{ alert.id }}"
+              >
+                Snooze
+              </button>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
     <h2>Ticker scorecards</h2>
     {% if rows.len() == 0 %}
       <p>This watchlist has no tickers yet.</p>
@@ -73,7 +112,12 @@
           <article class="source-card dashboard-card" data-status="{{ row.latest_status }}">
             <div class="comparison-card-head">
               <h3>{{ row.ticker }}</h3>
-              <span class="badge badge-{{ row.latest_status }}">{{ row.latest_status }}</span>
+              <div class="comparison-actions">
+                <span class="badge badge-{{ row.latest_status }}">{{ row.latest_status }}</span>
+                {% if row.active_alert_count > 0 %}
+                  <span class="badge badge-attention">{{ row.active_alert_count }} alert{% if row.active_alert_count != 1 %}s{% endif %}</span>
+                {% endif %}
+              </div>
             </div>
             <div class="meta-grid">
               <div><strong>Score:</strong> {{ row.latest_score_text }}</div>
@@ -206,6 +250,34 @@
       });
       if (!response.ok) {
         alert('Failed to refresh ticker');
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  document.querySelectorAll('.dismiss-alert').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const alertId = button.dataset.alertId;
+      const response = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/dismiss`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        alert('Failed to dismiss alert');
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  document.querySelectorAll('.snooze-alert').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const alertId = button.dataset.alertId;
+      const response = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/snooze`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        alert('Failed to snooze alert');
         return;
       }
       window.location.reload();

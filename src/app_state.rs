@@ -29,6 +29,8 @@ impl PromptStore {
             "synthesizer",
             "critic",
             "evaluator",
+            "scanner_signal",
+            "preliminary_thesis",
         ] {
             let path = base.join(format!("{name}.md"));
             let content = std::fs::read_to_string(&path)
@@ -80,6 +82,13 @@ impl AppState {
 
     pub async fn from_config(config: Config) -> Result<Self> {
         let db = Database::connect(&config.database_url).await?;
+
+        // Seed S&P 500 ticker universe if empty
+        let seed_count = db.seed_sp500_universe().await?;
+        if seed_count > 0 {
+            tracing::info!(count = seed_count, "seeded S&P 500 ticker universe");
+        }
+
         let prompts = PromptStore::load_default()?;
 
         if config.openai_api_key.trim().is_empty() {

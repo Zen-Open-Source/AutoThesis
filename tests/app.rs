@@ -932,6 +932,186 @@ async fn dashboard_payload_and_refresh_action_work() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn alerts_endpoints_work_and_dashboard_exposes_active_alerts() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let create_watchlist_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/watchlists")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({
+                    "name": "Alert Watchlist",
+                    "tickers": ["NVDA"]
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(create_watchlist_response.status(), StatusCode::OK);
+    let create_watchlist_body = create_watchlist_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let watchlist_payload: Value = serde_json::from_slice(&create_watchlist_body)?;
+    let watchlist_id = watchlist_payload["watchlist"]["id"]
+        .as_str()
+        .expect("watchlist id")
+        .to_string();
+
+    let run_one = ctx.state.db.create_run("NVDA", "Initial thesis").await?;
+    let iteration_one = ctx.state.db.create_iteration(&run_one.id, 1).await?;
+    ctx.state
+        .db
+        .update_iteration_evaluation(&iteration_one.id, r#"{"score":8.4}"#)
+        .await?;
+    ctx.state
+        .db
+        .set_iteration_status(&iteration_one.id, "completed")
+        .await?;
+    ctx.state
+        .db
+        .finalize_run(
+            &run_one.id,
+            1,
+            "# Executive Summary\nInitial",
+            "<h1>Executive Summary</h1><p>Initial</p>",
+            Some("Initial"),
+        )
+        .await?;
+
+    let run_two = ctx.state.db.create_run("NVDA", "Updated thesis").await?;
+    let iteration_two = ctx.state.db.create_iteration(&run_two.id, 1).await?;
+    ctx.state
+        .db
+        .update_iteration_evaluation(&iteration_two.id, r#"{"score":5.0}"#)
+        .await?;
+    ctx.state
+        .db
+        .set_iteration_status(&iteration_two.id, "completed")
+        .await?;
+    ctx.state
+        .db
+        .finalize_run(
+            &run_two.id,
+            1,
+            "# Executive Summary\nUpdated",
+            "<h1>Executive Summary</h1><p>Updated</p>",
+            Some("Updated"),
+        )
+        .await?;
+
+    let dashboard_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/dashboard?watchlist_id={watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(dashboard_response.status(), StatusCode::OK);
+    let dashboard_body = dashboard_response.into_body().collect().await?.to_bytes();
+    let dashboard_payload: Value = serde_json::from_slice(&dashboard_body)?;
+    let active_alerts = dashboard_payload["active_alerts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!active_alerts.is_empty());
+    assert!(
+        dashboard_payload["rows"][0]["active_alert_count"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 1
+    );
+
+    let alert_id = active_alerts[0]["id"]
+        .as_str()
+        .expect("alert id")
+        .to_string();
+    let dismiss_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/alerts/{alert_id}/dismiss"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(dismiss_response.status(), StatusCode::OK);
+
+    let active_alerts_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/api/alerts?watchlist_id={watchlist_id}&status=active"
+                ))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(active_alerts_response.status(), StatusCode::OK);
+    let active_alerts_body = active_alerts_response
+        .into_body()
+        .collect()
+        .await?
+        .to_bytes();
+    let active_alerts_payload: Value = serde_json::from_slice(&active_alerts_body)?;
+    assert!(
+        active_alerts_payload
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default()
+            < active_alerts.len()
+    );
+
+    let all_alerts_response = ctx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/alerts?watchlist_id={watchlist_id}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(all_alerts_response.status(), StatusCode::OK);
+    let all_alerts_body = all_alerts_response.into_body().collect().await?.to_bytes();
+    let all_alerts_payload: Value = serde_json::from_slice(&all_alerts_body)?;
+    let snooze_target = all_alerts_payload
+        .as_array()
+        .and_then(|alerts| {
+            alerts
+                .iter()
+                .find(|alert| alert["status"].as_str().unwrap_or_default() == "active")
+        })
+        .and_then(|alert| alert["id"].as_str())
+        .map(str::to_string);
+
+    if let Some(snooze_alert_id) = snooze_target {
+        let snooze_response = ctx
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/alerts/{snooze_alert_id}/snooze"))
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(snooze_response.status(), StatusCode::OK);
+    }
+
+    Ok(())
+}
+
 struct TestContext {
     _temp_dir: TempDir,
     state: AppState,

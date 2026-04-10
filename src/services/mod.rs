@@ -1,11 +1,16 @@
+pub mod alerts;
 pub mod batch;
 pub mod comparison;
 pub mod critic;
 pub mod dashboard;
 pub mod evaluator;
+pub mod opportunity_ranker;
 pub mod orchestrator;
 pub mod planner;
+pub mod preliminary_thesis;
 pub mod reader;
+pub mod scanner;
 pub mod search;
+pub mod signal_detector;
 pub mod source_ranker;
 pub mod synthesizer;

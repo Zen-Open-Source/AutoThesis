@@ -1,9 +1,11 @@
 use crate::{
     app_state::AppState,
     models::{DashboardResponse, DashboardTickerRow},
+    services::alerts::{self, TickerAlertSnapshot},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
+use std::collections::HashMap;
 
 pub async fn build_watchlist_dashboard(
     state: &AppState,
@@ -15,6 +17,7 @@ pub async fn build_watchlist_dashboard(
         .await?
         .ok_or_else(|| anyhow!("watchlist not found: {watchlist_id}"))?;
     let watchlist_tickers = state.db.list_watchlist_tickers(watchlist_id).await?;
+    let alert_rules = state.db.list_or_create_alert_rules(watchlist_id).await?;
 
     let mut rows = Vec::new();
     for watchlist_ticker in watchlist_tickers {
@@ -56,12 +59,37 @@ pub async fn build_watchlist_dashboard(
             None
         };
         let evidence_freshness = classify_freshness(latest_source_timestamp);
+        let previous_evidence_freshness = if let Some(run) = previous_run.as_ref() {
+            classify_freshness(
+                state
+                    .db
+                    .get_latest_source_timestamp_for_run(&run.id)
+                    .await?,
+            )
+        } else {
+            "no_evidence".to_string()
+        };
 
         let latest_status = latest_run
             .as_ref()
             .map(|run| run.status.clone())
             .unwrap_or_else(|| "no_data".to_string());
         let decision_state = classify_decision(&latest_status, latest_score, &evidence_freshness);
+        let previous_decision_state = previous_run.as_ref().map(|run| {
+            classify_decision(&run.status, previous_score, &previous_evidence_freshness)
+        });
+
+        let snapshot = TickerAlertSnapshot {
+            ticker: watchlist_ticker.ticker.clone(),
+            latest_run_id: latest_run.as_ref().map(|run| run.id.clone()),
+            latest_status: latest_status.clone(),
+            latest_score,
+            previous_score,
+            evidence_freshness: evidence_freshness.clone(),
+            decision_state: decision_state.clone(),
+            previous_decision_state,
+        };
+        alerts::evaluate_ticker_snapshot(state, watchlist_id, &alert_rules, &snapshot).await?;
 
         rows.push(DashboardTickerRow {
             ticker: watchlist_ticker.ticker,
@@ -74,13 +102,27 @@ pub async fn build_watchlist_dashboard(
             summary: latest_run.as_ref().and_then(|run| run.summary.clone()),
             evidence_freshness,
             decision_state,
+            active_alert_count: 0,
             last_run_updated_at: latest_run.as_ref().map(|run| run.updated_at),
         });
+    }
+
+    let active_alerts = state
+        .db
+        .list_thesis_alerts(watchlist_id, Some("active"))
+        .await?;
+    let mut active_alert_counts: HashMap<String, i64> = HashMap::new();
+    for alert in &active_alerts {
+        *active_alert_counts.entry(alert.ticker.clone()).or_insert(0) += 1;
+    }
+    for row in &mut rows {
+        row.active_alert_count = active_alert_counts.get(&row.ticker).copied().unwrap_or(0);
     }
 
     Ok(DashboardResponse {
         watchlist,
         rows,
+        active_alerts,
         generated_at: Utc::now(),
     })
 }

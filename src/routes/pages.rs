@@ -92,7 +92,18 @@ struct DashboardRowView {
     summary: String,
     has_latest_run: bool,
     latest_run_id: String,
+    active_alert_count: i64,
     last_run_updated_at_text: String,
+}
+
+#[derive(Clone)]
+struct DashboardAlertView {
+    id: String,
+    ticker: String,
+    alert_type: String,
+    severity: String,
+    message: String,
+    created_at_text: String,
 }
 
 #[derive(Template)]
@@ -104,6 +115,7 @@ struct DashboardTemplate {
     selected_watchlist_id: String,
     selected_watchlist_name: String,
     generated_at: String,
+    active_alerts: Vec<DashboardAlertView>,
     rows: Vec<DashboardRowView>,
 }
 
@@ -130,6 +142,7 @@ pub async fn dashboard_index(
             selected_watchlist_id: String::new(),
             selected_watchlist_name: String::new(),
             generated_at: String::new(),
+            active_alerts: Vec::new(),
             rows: Vec::new(),
         }
         .render()
@@ -171,10 +184,23 @@ pub async fn dashboard_index(
             summary: row.summary.unwrap_or_default(),
             has_latest_run: row.latest_run_id.is_some(),
             latest_run_id: row.latest_run_id.unwrap_or_default(),
+            active_alert_count: row.active_alert_count,
             last_run_updated_at_text: row
                 .last_run_updated_at
                 .map(|timestamp| timestamp.to_rfc3339())
                 .unwrap_or_else(|| "n/a".to_string()),
+        })
+        .collect::<Vec<_>>();
+    let active_alerts = dashboard
+        .active_alerts
+        .into_iter()
+        .map(|alert| DashboardAlertView {
+            id: alert.id,
+            ticker: alert.ticker,
+            alert_type: alert.alert_type,
+            severity: alert.severity,
+            message: alert.message,
+            created_at_text: alert.created_at.to_rfc3339(),
         })
         .collect::<Vec<_>>();
 
@@ -185,6 +211,7 @@ pub async fn dashboard_index(
         selected_watchlist_id: selected_watchlist.id,
         selected_watchlist_name: selected_watchlist.name,
         generated_at: dashboard.generated_at.to_rfc3339(),
+        active_alerts,
         rows,
     }
     .render()
@@ -564,4 +591,268 @@ fn format_optional_delta(score_delta: Option<f64>) -> String {
     score_delta
         .map(|value| format!("{value:+.1}"))
         .unwrap_or_else(|| "n/a".to_string())
+}
+
+// Scanner pages
+
+#[derive(Clone)]
+struct ScannerOpportunityView {
+    id: String,
+    ticker: String,
+    overall_score_text: String,
+    signal_strength_text: String,
+    coverage_gap_text: String,
+    timing_score_text: String,
+    has_key_catalysts: bool,
+    key_catalysts: String,
+    has_risk_factors: bool,
+    risk_factors: String,
+    status: String,
+    has_promoted_run: bool,
+    #[allow(dead_code)]
+    promoted_to_run_id: String,
+}
+
+#[derive(Template)]
+#[template(path = "scanner.html")]
+struct ScannerTemplate {
+    has_latest_scan_run: bool,
+    #[allow(dead_code)]
+    latest_scan_run_id: String,
+    latest_scan_run_status: String,
+    latest_scan_run_tickers_scanned: i64,
+    latest_scan_run_opportunities_found: i64,
+    latest_scan_run_started_at_text: String,
+    has_latest_scan_run_completed_at: bool,
+    latest_scan_run_completed_at_text: String,
+    has_latest_scan_run_error: bool,
+    latest_scan_run_error_message: String,
+    top_opportunities: Vec<ScannerOpportunityView>,
+    total_tickers_in_universe: i64,
+    has_scan_running: bool,
+}
+
+#[derive(Clone)]
+struct ScanSignalView {
+    signal_type: String,
+    strength_text: String,
+    description: String,
+    evidence: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "scanner_opportunity.html")]
+struct ScannerOpportunityTemplate {
+    opportunity: ScannerOpportunityDetailView,
+    signals: Vec<ScanSignalView>,
+    has_thesis: bool,
+    thesis_html: String,
+    has_ticker_name: bool,
+    ticker_name: String,
+    has_ticker_sector: bool,
+    ticker_sector: String,
+    has_existing_run: bool,
+    existing_run_id: String,
+    existing_run_status: String,
+}
+
+#[derive(Clone)]
+struct ScannerOpportunityDetailView {
+    id: String,
+    ticker: String,
+    overall_score_text: String,
+    signal_strength_text: String,
+    thesis_quality_text: String,
+    coverage_gap_text: String,
+    timing_score_text: String,
+    status: String,
+    has_promoted_run: bool,
+    promoted_to_run_id: String,
+}
+
+pub async fn scanner_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let dashboard = crate::services::scanner::build_scanner_dashboard(&state)
+        .await
+        .map_err(AppError::from)?;
+
+    let (
+        has_latest_scan_run,
+        latest_scan_run_id,
+        latest_scan_run_status,
+        latest_scan_run_tickers_scanned,
+        latest_scan_run_opportunities_found,
+        latest_scan_run_started_at_text,
+        has_latest_scan_run_completed_at,
+        latest_scan_run_completed_at_text,
+        has_latest_scan_run_error,
+        latest_scan_run_error_message,
+    ) = if let Some(run) = dashboard.latest_scan_run {
+        (
+            true,
+            run.id,
+            run.status.clone(),
+            run.tickers_scanned,
+            run.opportunities_found,
+            run.started_at
+                .map(format_timestamp)
+                .unwrap_or_default(),
+            run.completed_at.is_some(),
+            run.completed_at
+                .map(format_timestamp)
+                .unwrap_or_default(),
+            run.error_message.is_some(),
+            run.error_message.unwrap_or_default(),
+        )
+    } else {
+        (
+            false,
+            String::new(),
+            String::new(),
+            0,
+            0,
+            String::new(),
+            false,
+            String::new(),
+            false,
+            String::new(),
+        )
+    };
+
+    let top_opportunities: Vec<ScannerOpportunityView> = dashboard
+        .top_opportunities
+        .into_iter()
+        .map(|opp| ScannerOpportunityView {
+            id: opp.id,
+            ticker: opp.ticker,
+            overall_score_text: format_optional_score(Some(opp.overall_score)),
+            signal_strength_text: format_optional_score(Some(opp.signal_strength_score)),
+            coverage_gap_text: format_optional_score(Some(opp.coverage_gap_score)),
+            timing_score_text: format_optional_score(Some(opp.timing_score)),
+            has_key_catalysts: opp.key_catalysts.is_some(),
+            key_catalysts: opp.key_catalysts.unwrap_or_default(),
+            has_risk_factors: opp.risk_factors.is_some(),
+            risk_factors: opp.risk_factors.unwrap_or_default(),
+            status: opp.status,
+            has_promoted_run: opp.promoted_to_run_id.is_some(),
+            promoted_to_run_id: opp.promoted_to_run_id.unwrap_or_default(),
+        })
+        .collect();
+
+    let has_scan_running =
+        has_latest_scan_run && (latest_scan_run_status == "running" || latest_scan_run_status == "queued");
+
+    let html = ScannerTemplate {
+        has_latest_scan_run,
+        latest_scan_run_id,
+        latest_scan_run_status,
+        latest_scan_run_tickers_scanned,
+        latest_scan_run_opportunities_found,
+        latest_scan_run_started_at_text,
+        has_latest_scan_run_completed_at,
+        latest_scan_run_completed_at_text,
+        has_latest_scan_run_error,
+        latest_scan_run_error_message,
+        top_opportunities,
+        total_tickers_in_universe: dashboard.total_tickers_in_universe,
+        has_scan_running,
+    }
+    .render()
+    .map_err(|error| AppError::Internal(error.into()))?;
+    Ok(Html(html))
+}
+
+pub async fn scanner_opportunity_detail(
+    Path(opportunity_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Html<String>> {
+    let opportunity = state
+        .db
+        .get_scan_opportunity(&opportunity_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound)?;
+
+    let signals: Vec<crate::models::ScanSignal> =
+        serde_json::from_str(&opportunity.signals_json).unwrap_or_default();
+
+    let signal_views: Vec<ScanSignalView> = signals
+        .into_iter()
+        .map(|s| ScanSignalView {
+            signal_type: s.signal_type,
+            strength_text: format_optional_score(Some(s.strength * 10.0)),
+            description: s.description,
+            evidence: s.evidence,
+        })
+        .collect();
+
+    let ticker_info = state
+        .db
+        .get_ticker_universe(&opportunity.ticker)
+        .await
+        .map_err(AppError::from)?;
+
+    let existing_run = if let Some(ref run_id) = opportunity.promoted_to_run_id {
+        state.db.get_run(run_id).await.map_err(AppError::from)?
+    } else {
+        None
+    };
+
+    let opportunity_view = ScannerOpportunityDetailView {
+        id: opportunity.id.clone(),
+        ticker: opportunity.ticker.clone(),
+        overall_score_text: format_optional_score(Some(opportunity.overall_score)),
+        signal_strength_text: format_optional_score(Some(opportunity.signal_strength_score)),
+        thesis_quality_text: format_optional_score(opportunity.thesis_quality_score),
+        coverage_gap_text: format_optional_score(Some(opportunity.coverage_gap_score)),
+        timing_score_text: format_optional_score(Some(opportunity.timing_score)),
+        status: opportunity.status.clone(),
+        has_promoted_run: opportunity.promoted_to_run_id.is_some(),
+        promoted_to_run_id: opportunity.promoted_to_run_id.clone().unwrap_or_default(),
+    };
+
+    let has_thesis = opportunity.preliminary_thesis_html.is_some();
+    let thesis_html = opportunity.preliminary_thesis_html.unwrap_or_default();
+
+    let (
+        has_ticker_name,
+        ticker_name,
+        has_ticker_sector,
+        ticker_sector,
+    ) = if let Some(ref info) = ticker_info {
+        (
+            info.name.is_some(),
+            info.name.clone().unwrap_or_default(),
+            info.sector.is_some(),
+            info.sector.clone().unwrap_or_default(),
+        )
+    } else {
+        (false, String::new(), false, String::new())
+    };
+
+    let (has_existing_run, existing_run_id, existing_run_status) = if let Some(run) = existing_run {
+        (true, run.id, run.status)
+    } else {
+        (false, String::new(), String::new())
+    };
+
+    let html = ScannerOpportunityTemplate {
+        opportunity: opportunity_view,
+        signals: signal_views,
+        has_thesis,
+        thesis_html,
+        has_ticker_name,
+        ticker_name,
+        has_ticker_sector,
+        ticker_sector,
+        has_existing_run,
+        existing_run_id,
+        existing_run_status,
+    }
+    .render()
+    .map_err(|error| AppError::Internal(error.into()))?;
+    Ok(Html(html))
+}
+
+fn format_timestamp(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M UTC").to_string()
 }

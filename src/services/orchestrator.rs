@@ -2,7 +2,9 @@ use crate::{
     app_state::AppState,
     markdown::render_markdown,
     models::{EvaluatorOutput, EvidenceNoteRecord, Run, SourceRecord},
-    services::{batch, comparison, critic, evaluator, planner, reader, search, synthesizer},
+    services::{
+        alerts, batch, comparison, critic, evaluator, planner, reader, search, synthesizer,
+    },
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
@@ -19,6 +21,7 @@ pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
         if error.downcast_ref::<RunCancelled>().is_some() {
             info!(%run_id, "run cancelled before completion");
             let _ = state.db.set_run_status(&run_id, "cancelled").await;
+            let _ = sync_thesis_alerts_for_run(&state, &run_id).await;
             let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
             let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
             return Ok(());
@@ -36,10 +39,12 @@ pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
                 None,
             )
             .await;
+        let _ = sync_thesis_alerts_for_run(&state, &run_id).await;
         let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
         let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
         return Err(error);
     }
+    let _ = sync_thesis_alerts_for_run(&state, &run_id).await;
     let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
     let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
     Ok(())
@@ -331,6 +336,13 @@ async fn ensure_run_not_cancelled(state: &AppState, run_id: &str) -> Result<()> 
         .ok_or_else(|| anyhow!("run not found while checking status: {run_id}"))?;
     if run.status == "cancelled" {
         return Err(RunCancelled.into());
+    }
+    Ok(())
+}
+
+async fn sync_thesis_alerts_for_run(state: &AppState, run_id: &str) -> Result<()> {
+    if let Some(run) = state.db.get_run(run_id).await? {
+        alerts::evaluate_watchlists_for_ticker(state, &run.ticker).await?;
     }
     Ok(())
 }
