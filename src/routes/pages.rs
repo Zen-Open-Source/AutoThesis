@@ -693,13 +693,9 @@ pub async fn scanner_index(State(state): State<AppState>) -> AppResult<Html<Stri
             run.status.clone(),
             run.tickers_scanned,
             run.opportunities_found,
-            run.started_at
-                .map(format_timestamp)
-                .unwrap_or_default(),
+            run.started_at.map(format_timestamp).unwrap_or_default(),
             run.completed_at.is_some(),
-            run.completed_at
-                .map(format_timestamp)
-                .unwrap_or_default(),
+            run.completed_at.map(format_timestamp).unwrap_or_default(),
             run.error_message.is_some(),
             run.error_message.unwrap_or_default(),
         )
@@ -738,8 +734,8 @@ pub async fn scanner_index(State(state): State<AppState>) -> AppResult<Html<Stri
         })
         .collect();
 
-    let has_scan_running =
-        has_latest_scan_run && (latest_scan_run_status == "running" || latest_scan_run_status == "queued");
+    let has_scan_running = has_latest_scan_run
+        && (latest_scan_run_status == "running" || latest_scan_run_status == "queued");
 
     let html = ScannerTemplate {
         has_latest_scan_run,
@@ -813,21 +809,17 @@ pub async fn scanner_opportunity_detail(
     let has_thesis = opportunity.preliminary_thesis_html.is_some();
     let thesis_html = opportunity.preliminary_thesis_html.unwrap_or_default();
 
-    let (
-        has_ticker_name,
-        ticker_name,
-        has_ticker_sector,
-        ticker_sector,
-    ) = if let Some(ref info) = ticker_info {
-        (
-            info.name.is_some(),
-            info.name.clone().unwrap_or_default(),
-            info.sector.is_some(),
-            info.sector.clone().unwrap_or_default(),
-        )
-    } else {
-        (false, String::new(), false, String::new())
-    };
+    let (has_ticker_name, ticker_name, has_ticker_sector, ticker_sector) =
+        if let Some(ref info) = ticker_info {
+            (
+                info.name.is_some(),
+                info.name.clone().unwrap_or_default(),
+                info.sector.is_some(),
+                info.sector.clone().unwrap_or_default(),
+            )
+        } else {
+            (false, String::new(), false, String::new())
+        };
 
     let (has_existing_run, existing_run_id, existing_run_status) = if let Some(run) = existing_run {
         (true, run.id, run.status)

@@ -108,7 +108,10 @@ pub fn calculate_sector_score(existing_sectors: &[String], ticker_sector: Option
     };
 
     // Higher score for sectors not already in opportunities
-    let sector_count = existing_sectors.iter().filter(|s| s.as_str() == sector).count();
+    let sector_count = existing_sectors
+        .iter()
+        .filter(|s| s.as_str() == sector)
+        .count();
 
     if sector_count == 0 {
         10.0 // New sector - diversification bonus

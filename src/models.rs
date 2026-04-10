@@ -595,3 +595,412 @@ pub struct PreliminaryThesisOutput {
     pub risk_factors: String,
     pub quality_score: f64,
 }
+
+// Multi-Model Research Panel models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmProvider {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub api_key_encrypted: Option<String>,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub is_enabled: bool,
+    pub is_default: bool,
+    pub priority: i64,
+    pub config_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRun {
+    pub id: String,
+    pub run_id: String,
+    pub provider_id: String,
+    pub iteration_number: Option<i64>,
+    pub output_type: String,
+    pub output_content: Option<String>,
+    pub tokens_used: Option<i64>,
+    pub latency_ms: Option<i64>,
+    pub cost_estimate: Option<f64>,
+    pub quality_score: Option<f64>,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelComparison {
+    pub id: String,
+    pub run_id: String,
+    pub comparison_type: String,
+    pub winner_provider_id: Option<String>,
+    pub comparison_json: String,
+    pub similarity_score: Option<f64>,
+    pub key_differences: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelQualityScore {
+    pub id: String,
+    pub provider_id: String,
+    pub total_runs: i64,
+    pub successful_runs: i64,
+    pub avg_quality_score: Option<f64>,
+    pub avg_latency_ms: Option<f64>,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+    pub accuracy_score: Option<f64>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateLlmProviderRequest {
+    pub name: String,
+    pub provider_type: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub is_enabled: Option<bool>,
+    pub is_default: Option<bool>,
+    pub priority: Option<i64>,
+    pub config_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateLlmProviderRequest {
+    pub name: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub is_enabled: Option<bool>,
+    pub is_default: Option<bool>,
+    pub priority: Option<i64>,
+    pub config_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiModelRunRequest {
+    pub provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiModelRunResponse {
+    pub run_id: String,
+    pub model_runs: Vec<ModelRun>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelComparisonDetail {
+    pub comparison: ModelComparison,
+    pub model_runs: Vec<ModelRun>,
+    pub providers: Vec<LlmProvider>,
+}
+
+// Thesis Performance Tracking models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceSnapshot {
+    pub id: String,
+    pub ticker: String,
+    pub price_date: chrono::NaiveDate,
+    pub open_price: f64,
+    pub close_price: f64,
+    pub high_price: Option<f64>,
+    pub low_price: Option<f64>,
+    pub volume: Option<i64>,
+    pub adjusted_close: Option<f64>,
+    pub source: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThesisOutcome {
+    pub id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub thesis_date: chrono::NaiveDate,
+    pub thesis_price: f64,
+    pub return_1d: Option<f64>,
+    pub return_7d: Option<f64>,
+    pub return_30d: Option<f64>,
+    pub return_90d: Option<f64>,
+    pub return_180d: Option<f64>,
+    pub return_365d: Option<f64>,
+    pub price_1d: Option<f64>,
+    pub price_7d: Option<f64>,
+    pub price_30d: Option<f64>,
+    pub price_90d: Option<f64>,
+    pub price_180d: Option<f64>,
+    pub price_365d: Option<f64>,
+    pub thesis_direction: Option<String>,
+    pub thesis_correct_1d: Option<bool>,
+    pub thesis_correct_7d: Option<bool>,
+    pub thesis_correct_30d: Option<bool>,
+    pub thesis_correct_90d: Option<bool>,
+    pub notes: Option<String>,
+    pub last_updated: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThesisAccuracy {
+    pub id: String,
+    pub ticker: Option<String>,
+    pub provider_id: Option<String>,
+    pub time_horizon: String,
+    pub total_theses: i64,
+    pub correct_theses: i64,
+    pub accuracy_rate: Option<f64>,
+    pub avg_return: Option<f64>,
+    pub median_return: Option<f64>,
+    pub best_return: Option<f64>,
+    pub worst_return: Option<f64>,
+    pub sharpe_ratio: Option<f64>,
+    pub win_rate: Option<f64>,
+    pub avg_holding_days: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceTrackingJob {
+    pub id: String,
+    pub job_type: String,
+    pub target_date: chrono::NaiveDate,
+    pub tickers_json: String,
+    pub status: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub prices_fetched: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceDashboard {
+    pub overall_accuracy: Option<f64>,
+    pub total_theses_tracked: i64,
+    pub accuracy_by_horizon: Vec<ThesisAccuracy>,
+    pub accuracy_by_ticker: Vec<ThesisAccuracy>,
+    pub accuracy_by_model: Vec<ThesisAccuracy>,
+    pub recent_outcomes: Vec<ThesisOutcome>,
+    pub top_performers: Vec<ThesisOutcome>,
+    pub worst_performers: Vec<ThesisOutcome>,
+}
+
+// Evidence Quality Scoring models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceReputation {
+    pub id: String,
+    pub domain: String,
+    pub reputation_score: f64,
+    pub total_citations: i64,
+    pub successful_citations: i64,
+    pub failed_citations: i64,
+    pub avg_evidence_quality: Option<f64>,
+    pub source_type: Option<String>,
+    pub bias_rating: Option<String>,
+    pub reliability_tier: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceOutcome {
+    pub id: String,
+    pub evidence_note_id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub claim_type: Option<String>,
+    pub claim_text: Option<String>,
+    pub outcome_type: String,
+    pub outcome_date: chrono::NaiveDate,
+    pub price_at_claim: Option<f64>,
+    pub price_at_outcome: Option<f64>,
+    pub return_since_claim: Option<f64>,
+    pub was_correct: bool,
+    pub confidence_at_claim: Option<f64>,
+    pub outcome_notes: Option<String>,
+    pub verified_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceQualityMetric {
+    pub id: String,
+    pub source_id: String,
+    pub domain: Option<String>,
+    pub quality_score: Option<f64>,
+    pub relevance_score: Option<f64>,
+    pub timeliness_score: Option<f64>,
+    pub authority_score: Option<f64>,
+    pub citation_count: i64,
+    pub last_cited_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainReliabilityHistory {
+    pub id: String,
+    pub domain: String,
+    pub recorded_date: chrono::NaiveDate,
+    pub reliability_score: f64,
+    pub sample_size: i64,
+    pub success_rate: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateEvidenceOutcomeRequest {
+    pub evidence_note_id: String,
+    pub outcome_type: String,
+    pub outcome_date: chrono::NaiveDate,
+    pub was_correct: bool,
+    pub outcome_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceQualityDashboard {
+    pub top_domains: Vec<SourceReputation>,
+    pub worst_domains: Vec<SourceReputation>,
+    pub recent_evidence_outcomes: Vec<EvidenceOutcome>,
+    pub overall_success_rate: Option<f64>,
+    pub total_evidence_tracked: i64,
+}
+
+// Historical Analytics models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThesisHistory {
+    pub id: String,
+    pub run_id: String,
+    pub ticker: String,
+    pub thesis_date: chrono::NaiveDate,
+    pub thesis_markdown: String,
+    pub thesis_html: Option<String>,
+    pub executive_summary: Option<String>,
+    pub bull_case: Option<String>,
+    pub bear_case: Option<String>,
+    pub key_catalysts: Option<String>,
+    pub key_risks: Option<String>,
+    pub conviction_level: Option<String>,
+    pub thesis_direction: Option<String>,
+    pub model_provider_id: Option<String>,
+    pub signals_json: Option<String>,
+    pub iteration_number: Option<i64>,
+    pub archived_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalEffectiveness {
+    pub id: String,
+    pub signal_type: String,
+    pub signal_date: chrono::NaiveDate,
+    pub ticker: String,
+    pub signal_strength: f64,
+    pub signal_description: Option<String>,
+    pub outcome_type: Option<String>,
+    pub return_7d: Option<f64>,
+    pub return_30d: Option<f64>,
+    pub return_90d: Option<f64>,
+    pub was_predictive: Option<bool>,
+    pub thesis_run_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalEffectivenessStats {
+    pub id: String,
+    pub signal_type: String,
+    pub total_signals: i64,
+    pub predictive_signals: i64,
+    pub predictive_rate: Option<f64>,
+    pub avg_return_7d: Option<f64>,
+    pub avg_return_30d: Option<f64>,
+    pub avg_return_90d: Option<f64>,
+    pub best_return_90d: Option<f64>,
+    pub worst_return_90d: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResearchAnalytics {
+    pub id: String,
+    pub analytics_date: chrono::NaiveDate,
+    pub total_runs: i64,
+    pub total_theses: i64,
+    pub avg_conviction: Option<f64>,
+    pub avg_iteration_count: Option<f64>,
+    pub avg_source_count: Option<f64>,
+    pub avg_evidence_count: Option<f64>,
+    pub avg_quality_score: Option<f64>,
+    pub thesis_accuracy_30d: Option<f64>,
+    pub thesis_accuracy_90d: Option<f64>,
+    pub top_performing_ticker: Option<String>,
+    pub worst_performing_ticker: Option<String>,
+    pub best_model_provider_id: Option<String>,
+    pub model_accuracy_ranking_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickerResearchSummary {
+    pub id: String,
+    pub ticker: String,
+    pub first_research_date: Option<chrono::NaiveDate>,
+    pub last_research_date: Option<chrono::NaiveDate>,
+    pub total_research_runs: i64,
+    pub avg_conviction: Option<f64>,
+    pub avg_quality_score: Option<f64>,
+    pub thesis_accuracy_30d: Option<f64>,
+    pub thesis_accuracy_90d: Option<f64>,
+    pub total_return_all_time: Option<f64>,
+    pub best_return_90d: Option<f64>,
+    pub worst_return_90d: Option<f64>,
+    pub research_frequency: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPerformanceHistory {
+    pub id: String,
+    pub provider_id: String,
+    pub recorded_date: chrono::NaiveDate,
+    pub total_runs: i64,
+    pub successful_runs: i64,
+    pub avg_quality_score: Option<f64>,
+    pub avg_latency_ms: Option<f64>,
+    pub accuracy_score: Option<f64>,
+    pub total_tokens: i64,
+    pub total_cost: f64,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyticsDashboard {
+    pub latest_analytics: Option<ResearchAnalytics>,
+    pub signal_effectiveness: Vec<SignalEffectivenessStats>,
+    pub top_tickers: Vec<TickerResearchSummary>,
+    pub model_rankings: Vec<ModelQualityScore>,
+    pub recent_thesis_history: Vec<ThesisHistory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickerHistoryDetail {
+    pub summary: TickerResearchSummary,
+    pub thesis_history: Vec<ThesisHistory>,
+    pub outcomes: Vec<ThesisOutcome>,
+    pub signal_history: Vec<SignalEffectiveness>,
+}

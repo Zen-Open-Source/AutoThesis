@@ -1,8 +1,14 @@
 use crate::models::{
-    AlertRule, BatchJob, BatchJobRun, BatchJobRunWithDetails, Bookmark, Comparison, ComparisonRun,
-    ComparisonRunWithDetails, EventRecord, EvidenceNoteRecord, Iteration, IterationDetail, Run,
-    RunTemplate, ScanOpportunity, ScanRun, ScannerConfig, SearchQueryRecord, SearchResultRecord,
-    SourceAnnotation, SourceRecord, ThesisAlert, TickerUniverse, Watchlist, WatchlistTicker,
+    AlertRule, BatchJob, BatchJobRun, BatchJobRunWithDetails, Bookmark,
+    Comparison, ComparisonRun, ComparisonRunWithDetails,
+    DomainReliabilityHistory, EvidenceNoteRecord, EvidenceOutcome,
+    EventRecord, Iteration, IterationDetail, LlmProvider,
+    ModelComparison, ModelQualityScore, ModelRun,
+    PriceSnapshot, ResearchAnalytics, Run, RunTemplate,
+    ScanOpportunity, ScanRun, ScannerConfig, SearchQueryRecord, SearchResultRecord,
+    SignalEffectiveness, SourceAnnotation, SourceQualityMetric, SourceRecord,
+    SourceReputation, ThesisAccuracy, ThesisAlert, ThesisHistory, ThesisOutcome,
+    TickerResearchSummary, TickerUniverse, Watchlist, WatchlistTicker,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -2072,6 +2078,629 @@ impl Database {
 
         self.count_ticker_universe(false).await
     }
+
+    // Multi-Model Research Panel database methods
+
+    pub async fn create_llm_provider(
+        &self,
+        name: &str,
+        provider_type: &str,
+        api_key_encrypted: Option<&str>,
+        model: &str,
+        base_url: Option<&str>,
+        is_enabled: bool,
+        is_default: bool,
+        priority: i64,
+        config_json: Option<&str>,
+    ) -> Result<LlmProvider> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO llm_providers (id, name, provider_type, api_key_encrypted, model, base_url, is_enabled, is_default, priority, config_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                id, name, provider_type, api_key_encrypted, model, base_url,
+                if is_enabled { 1 } else { 0 }, if is_default { 1 } else { 0 },
+                priority, config_json, encode_time(now), encode_time(now),
+            ],
+        )?;
+        self.get_llm_provider(&id)
+            .await?
+            .context("created provider missing")
+    }
+
+    pub async fn get_llm_provider(&self, provider_id: &str) -> Result<Option<LlmProvider>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM llm_providers WHERE id = ?1",
+            [provider_id],
+            map_llm_provider,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_llm_providers(&self, enabled_only: bool) -> Result<Vec<LlmProvider>> {
+        let conn = self.open_connection()?;
+        let sql = if enabled_only {
+            "SELECT * FROM llm_providers WHERE is_enabled = 1 ORDER BY priority DESC, name ASC"
+        } else {
+            "SELECT * FROM llm_providers ORDER BY priority DESC, name ASC"
+        };
+        let mut statement = conn.prepare(sql)?;
+        let rows = statement.query_map([], map_llm_provider)?;
+        collect_rows(rows)
+    }
+
+    pub async fn delete_llm_provider(&self, provider_id: &str) -> Result<bool> {
+        let conn = self.open_connection()?;
+        let affected = conn.execute("DELETE FROM llm_providers WHERE id = ?1", [provider_id])?;
+        Ok(affected > 0)
+    }
+
+    pub async fn create_model_run(
+        &self,
+        run_id: &str,
+        provider_id: &str,
+        iteration_number: Option<i64>,
+        output_type: &str,
+        output_content: Option<&str>,
+        tokens_used: Option<i64>,
+        latency_ms: Option<i64>,
+        cost_estimate: Option<f64>,
+        quality_score: Option<f64>,
+        status: &str,
+        error_message: Option<&str>,
+    ) -> Result<ModelRun> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO model_runs (id, run_id, provider_id, iteration_number, output_type, output_content, tokens_used, latency_ms, cost_estimate, quality_score, status, error_message, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                id, run_id, provider_id, iteration_number, output_type, output_content,
+                tokens_used, latency_ms, cost_estimate, quality_score, status, error_message,
+                encode_time(now),
+            ],
+        )?;
+        self.get_model_run(&id).await?.context("model run missing")
+    }
+
+    pub async fn get_model_run(&self, id: &str) -> Result<Option<ModelRun>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM model_runs WHERE id = ?1",
+            [id],
+            map_model_run,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_model_runs_for_run(&self, run_id: &str) -> Result<Vec<ModelRun>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM model_runs WHERE run_id = ?1 ORDER BY created_at ASC")?;
+        let rows = statement.query_map([run_id], map_model_run)?;
+        collect_rows(rows)
+    }
+
+    pub async fn create_model_comparison(
+        &self,
+        run_id: &str,
+        comparison_type: &str,
+        winner_provider_id: Option<&str>,
+        comparison_json: &str,
+        similarity_score: Option<f64>,
+        key_differences: Option<&str>,
+    ) -> Result<ModelComparison> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO model_comparisons (id, run_id, comparison_type, winner_provider_id, comparison_json, similarity_score, key_differences, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, run_id, comparison_type, winner_provider_id, comparison_json, similarity_score, key_differences, encode_time(now)],
+        )?;
+        self.get_model_comparison(&id)
+            .await?
+            .context("comparison missing")
+    }
+
+    pub async fn get_model_comparison(&self, id: &str) -> Result<Option<ModelComparison>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM model_comparisons WHERE id = ?1",
+            [id],
+            map_model_comparison,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn upsert_model_quality_score(
+        &self,
+        provider_id: &str,
+        total_runs: i64,
+        successful_runs: i64,
+        avg_quality_score: Option<f64>,
+        avg_latency_ms: Option<f64>,
+        total_tokens: i64,
+        total_cost: f64,
+        accuracy_score: Option<f64>,
+    ) -> Result<ModelQualityScore> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO model_quality_scores (id, provider_id, total_runs, successful_runs, avg_quality_score, avg_latency_ms, total_tokens, total_cost, accuracy_score, last_run_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(provider_id) DO UPDATE SET
+               total_runs = excluded.total_runs, successful_runs = excluded.successful_runs,
+               avg_quality_score = excluded.avg_quality_score, avg_latency_ms = excluded.avg_latency_ms,
+               total_tokens = excluded.total_tokens, total_cost = excluded.total_cost,
+               accuracy_score = excluded.accuracy_score, last_run_at = excluded.last_run_at, updated_at = excluded.updated_at",
+            params![id, provider_id, total_runs, successful_runs, avg_quality_score, avg_latency_ms, total_tokens, total_cost, accuracy_score, encode_time(now), encode_time(now), encode_time(now)],
+        )?;
+        self.get_model_quality_score(provider_id)
+            .await?
+            .context("quality score missing")
+    }
+
+    pub async fn get_model_quality_score(
+        &self,
+        provider_id: &str,
+    ) -> Result<Option<ModelQualityScore>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM model_quality_scores WHERE provider_id = ?1",
+            [provider_id],
+            map_model_quality_score,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_model_quality_scores(&self) -> Result<Vec<ModelQualityScore>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM model_quality_scores ORDER BY accuracy_score DESC NULLS LAST",
+        )?;
+        let rows = statement.query_map([], map_model_quality_score)?;
+        collect_rows(rows)
+    }
+
+    // Performance Tracking database methods
+
+    pub async fn create_price_snapshot(
+        &self,
+        ticker: &str,
+        price_date: chrono::NaiveDate,
+        open_price: f64,
+        close_price: f64,
+        high_price: Option<f64>,
+        low_price: Option<f64>,
+        volume: Option<i64>,
+        adjusted_close: Option<f64>,
+        source: &str,
+    ) -> Result<PriceSnapshot> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO price_snapshots (id, ticker, price_date, open_price, close_price, high_price, low_price, volume, adjusted_close, source, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![id, ticker, price_date.to_string(), open_price, close_price, high_price, low_price, volume, adjusted_close, source, encode_time(now)],
+        )?;
+        self.get_price_snapshot_by_ticker_date(ticker, price_date)
+            .await?
+            .context("price snapshot missing")
+    }
+
+    pub async fn get_price_snapshot_by_ticker_date(
+        &self,
+        ticker: &str,
+        price_date: chrono::NaiveDate,
+    ) -> Result<Option<PriceSnapshot>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM price_snapshots WHERE ticker = ?1 AND price_date = ?2",
+            params![ticker, price_date.to_string()],
+            map_price_snapshot,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn get_latest_price_snapshot(&self, ticker: &str) -> Result<Option<PriceSnapshot>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM price_snapshots WHERE ticker = ?1 ORDER BY price_date DESC LIMIT 1",
+            [ticker],
+            map_price_snapshot,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn create_thesis_outcome(
+        &self,
+        run_id: &str,
+        ticker: &str,
+        thesis_date: chrono::NaiveDate,
+        thesis_price: f64,
+    ) -> Result<ThesisOutcome> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO thesis_outcomes (id, run_id, ticker, thesis_date, thesis_price, last_updated, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, run_id, ticker, thesis_date.to_string(), thesis_price, encode_time(now), encode_time(now)],
+        )?;
+        self.get_thesis_outcome(&id)
+            .await?
+            .context("thesis outcome missing")
+    }
+
+    pub async fn get_thesis_outcome(&self, id: &str) -> Result<Option<ThesisOutcome>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM thesis_outcomes WHERE id = ?1",
+            [id],
+            map_thesis_outcome,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn get_thesis_outcome_for_run(&self, run_id: &str) -> Result<Option<ThesisOutcome>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM thesis_outcomes WHERE run_id = ?1",
+            [run_id],
+            map_thesis_outcome,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn update_thesis_outcome_returns(
+        &self,
+        id: &str,
+        return_1d: Option<f64>,
+        return_7d: Option<f64>,
+        return_30d: Option<f64>,
+        return_90d: Option<f64>,
+        price_1d: Option<f64>,
+        price_7d: Option<f64>,
+        price_30d: Option<f64>,
+        price_90d: Option<f64>,
+    ) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute(
+            "UPDATE thesis_outcomes SET return_1d = ?1, return_7d = ?2, return_30d = ?3, return_90d = ?4, price_1d = ?5, price_7d = ?6, price_30d = ?7, price_90d = ?8, last_updated = ?9 WHERE id = ?10",
+            params![return_1d, return_7d, return_30d, return_90d, price_1d, price_7d, price_30d, price_90d, encode_time(Utc::now()), id],
+        )?;
+        Ok(())
+    }
+
+    pub async fn list_thesis_outcomes_for_ticker(
+        &self,
+        ticker: &str,
+    ) -> Result<Vec<ThesisOutcome>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn
+            .prepare("SELECT * FROM thesis_outcomes WHERE ticker = ?1 ORDER BY thesis_date DESC")?;
+        let rows = statement.query_map([ticker], map_thesis_outcome)?;
+        collect_rows(rows)
+    }
+
+    pub async fn list_recent_thesis_outcomes(&self, limit: i64) -> Result<Vec<ThesisOutcome>> {
+        let conn = self.open_connection()?;
+        let mut statement =
+            conn.prepare("SELECT * FROM thesis_outcomes ORDER BY thesis_date DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_thesis_outcome)?;
+        collect_rows(rows)
+    }
+
+    pub async fn upsert_thesis_accuracy(
+        &self,
+        ticker: Option<&str>,
+        provider_id: Option<&str>,
+        time_horizon: &str,
+        total_theses: i64,
+        correct_theses: i64,
+        accuracy_rate: Option<f64>,
+        avg_return: Option<f64>,
+    ) -> Result<ThesisAccuracy> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO thesis_accuracy (id, ticker, provider_id, time_horizon, total_theses, correct_theses, accuracy_rate, avg_return, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(ticker, provider_id, time_horizon) DO UPDATE SET
+               total_theses = excluded.total_theses, correct_theses = excluded.correct_theses,
+               accuracy_rate = excluded.accuracy_rate, avg_return = excluded.avg_return, updated_at = excluded.updated_at",
+            params![id, ticker, provider_id, time_horizon, total_theses, correct_theses, accuracy_rate, avg_return, encode_time(now), encode_time(now)],
+        )?;
+        self.get_thesis_accuracy(ticker, provider_id, time_horizon)
+            .await?
+            .context("accuracy missing")
+    }
+
+    pub async fn get_thesis_accuracy(
+        &self,
+        ticker: Option<&str>,
+        provider_id: Option<&str>,
+        time_horizon: &str,
+    ) -> Result<Option<ThesisAccuracy>> {
+        let conn = self.open_connection()?;
+        conn.query_row("SELECT * FROM thesis_accuracy WHERE ticker IS ?1 AND provider_id IS ?2 AND time_horizon = ?3", params![ticker, provider_id, time_horizon], map_thesis_accuracy)
+            .optional().map_err(Into::into)
+    }
+
+    pub async fn list_thesis_accuracy_by_horizon(&self) -> Result<Vec<ThesisAccuracy>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare("SELECT * FROM thesis_accuracy WHERE ticker IS NULL AND provider_id IS NULL ORDER BY time_horizon")?;
+        let rows = statement.query_map([], map_thesis_accuracy)?;
+        collect_rows(rows)
+    }
+
+    // Evidence Quality database methods
+
+    pub async fn upsert_source_reputation(
+        &self,
+        domain: &str,
+        reputation_score: f64,
+        total_citations: i64,
+        successful_citations: i64,
+        failed_citations: i64,
+    ) -> Result<SourceReputation> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO source_reputation (id, domain, reputation_score, total_citations, successful_citations, failed_citations, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(domain) DO UPDATE SET
+               reputation_score = excluded.reputation_score, total_citations = excluded.total_citations,
+               successful_citations = excluded.successful_citations, failed_citations = excluded.failed_citations, updated_at = excluded.updated_at",
+            params![id, domain, reputation_score, total_citations, successful_citations, failed_citations, encode_time(now), encode_time(now)],
+        )?;
+        self.get_source_reputation(domain)
+            .await?
+            .context("source reputation missing")
+    }
+
+    pub async fn get_source_reputation(&self, domain: &str) -> Result<Option<SourceReputation>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM source_reputation WHERE domain = ?1",
+            [domain],
+            map_source_reputation,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_top_source_reputations(&self, limit: i64) -> Result<Vec<SourceReputation>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn
+            .prepare("SELECT * FROM source_reputation ORDER BY reputation_score DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_source_reputation)?;
+        collect_rows(rows)
+    }
+
+    pub async fn create_evidence_outcome(
+        &self,
+        evidence_note_id: &str,
+        run_id: &str,
+        ticker: &str,
+        outcome_type: &str,
+        outcome_date: chrono::NaiveDate,
+        was_correct: bool,
+    ) -> Result<EvidenceOutcome> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO evidence_outcomes (id, evidence_note_id, run_id, ticker, outcome_type, outcome_date, was_correct, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, evidence_note_id, run_id, ticker, outcome_type, outcome_date.to_string(), if was_correct { 1 } else { 0 }, encode_time(now)],
+        )?;
+        self.get_evidence_outcome(&id)
+            .await?
+            .context("evidence outcome missing")
+    }
+
+    pub async fn get_evidence_outcome(&self, id: &str) -> Result<Option<EvidenceOutcome>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM evidence_outcomes WHERE id = ?1",
+            [id],
+            map_evidence_outcome,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    // Historical Analytics database methods
+
+    pub async fn create_thesis_history(
+        &self,
+        run_id: &str,
+        ticker: &str,
+        thesis_date: chrono::NaiveDate,
+        thesis_markdown: &str,
+        model_provider_id: Option<&str>,
+    ) -> Result<ThesisHistory> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO thesis_history (id, run_id, ticker, thesis_date, thesis_markdown, model_provider_id, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, run_id, ticker, thesis_date.to_string(), thesis_markdown, model_provider_id, encode_time(now)],
+        )?;
+        self.get_thesis_history(&id)
+            .await?
+            .context("thesis history missing")
+    }
+
+    pub async fn get_thesis_history(&self, id: &str) -> Result<Option<ThesisHistory>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM thesis_history WHERE id = ?1",
+            [id],
+            map_thesis_history,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_thesis_history_for_ticker(
+        &self,
+        ticker: &str,
+        limit: i64,
+    ) -> Result<Vec<ThesisHistory>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM thesis_history WHERE ticker = ?1 ORDER BY thesis_date DESC LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![ticker, limit], map_thesis_history)?;
+        collect_rows(rows)
+    }
+
+    pub async fn upsert_ticker_research_summary(
+        &self,
+        ticker: &str,
+        total_research_runs: i64,
+        avg_quality_score: Option<f64>,
+        thesis_accuracy_90d: Option<f64>,
+    ) -> Result<TickerResearchSummary> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO ticker_research_summary (id, ticker, total_research_runs, avg_quality_score, thesis_accuracy_90d, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(ticker) DO UPDATE SET
+               total_research_runs = excluded.total_research_runs, avg_quality_score = excluded.avg_quality_score,
+               thesis_accuracy_90d = excluded.thesis_accuracy_90d, updated_at = excluded.updated_at",
+            params![id, ticker, total_research_runs, avg_quality_score, thesis_accuracy_90d, encode_time(now), encode_time(now)],
+        )?;
+        self.get_ticker_research_summary(ticker)
+            .await?
+            .context("ticker summary missing")
+    }
+
+    pub async fn get_ticker_research_summary(
+        &self,
+        ticker: &str,
+    ) -> Result<Option<TickerResearchSummary>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM ticker_research_summary WHERE ticker = ?1",
+            [ticker],
+            map_ticker_research_summary,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn list_top_ticker_research_summaries(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<TickerResearchSummary>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare("SELECT * FROM ticker_research_summary ORDER BY thesis_accuracy_90d DESC NULLS LAST LIMIT ?1")?;
+        let rows = statement.query_map([limit], map_ticker_research_summary)?;
+        collect_rows(rows)
+    }
+
+    pub async fn create_signal_effectiveness(
+        &self,
+        signal_type: &str,
+        signal_date: chrono::NaiveDate,
+        ticker: &str,
+        signal_strength: f64,
+        return_30d: Option<f64>,
+        was_predictive: Option<bool>,
+    ) -> Result<SignalEffectiveness> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_effectiveness (id, signal_type, signal_date, ticker, signal_strength, return_30d, was_predictive, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, signal_type, signal_date.to_string(), ticker, signal_strength, return_30d, was_predictive.map(|b| if b { 1 } else { 0 }), encode_time(now)],
+        )?;
+        self.get_signal_effectiveness(&id)
+            .await?
+            .context("signal effectiveness missing")
+    }
+
+    pub async fn get_signal_effectiveness(&self, id: &str) -> Result<Option<SignalEffectiveness>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM signal_effectiveness WHERE id = ?1",
+            [id],
+            map_signal_effectiveness,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn create_research_analytics(
+        &self,
+        analytics_date: chrono::NaiveDate,
+        total_runs: i64,
+        total_theses: i64,
+        avg_quality_score: Option<f64>,
+        thesis_accuracy_30d: Option<f64>,
+        thesis_accuracy_90d: Option<f64>,
+    ) -> Result<ResearchAnalytics> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO research_analytics (id, analytics_date, total_runs, total_theses, avg_quality_score, thesis_accuracy_30d, thesis_accuracy_90d, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, analytics_date.to_string(), total_runs, total_theses, avg_quality_score, thesis_accuracy_30d, thesis_accuracy_90d, encode_time(now)],
+        )?;
+        self.get_research_analytics_by_id(&id)
+            .await?
+            .context("research analytics missing")
+    }
+
+    pub async fn get_research_analytics_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<ResearchAnalytics>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM research_analytics WHERE id = ?1",
+            [id],
+            map_research_analytics,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub async fn get_latest_research_analytics(&self) -> Result<Option<ResearchAnalytics>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM research_analytics ORDER BY analytics_date DESC LIMIT 1",
+            [],
+            map_research_analytics,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
 }
 
 fn map_comparison(row: &Row<'_>) -> rusqlite::Result<Comparison> {
@@ -2252,5 +2881,295 @@ fn map_scan_opportunity(row: &Row<'_>) -> rusqlite::Result<ScanOpportunity> {
         status: row.get("status")?,
         created_at: parse_time(row.get("created_at")?)?,
         updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_llm_provider(row: &Row<'_>) -> rusqlite::Result<LlmProvider> {
+    Ok(LlmProvider {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        provider_type: row.get("provider_type")?,
+        api_key_encrypted: row.get("api_key_encrypted")?,
+        model: row.get("model")?,
+        base_url: row.get("base_url")?,
+        is_enabled: row.get::<_, i64>("is_enabled")? > 0,
+        is_default: row.get::<_, i64>("is_default")? > 0,
+        priority: row.get("priority")?,
+        config_json: row.get("config_json")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_model_run(row: &Row<'_>) -> rusqlite::Result<ModelRun> {
+    Ok(ModelRun {
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        provider_id: row.get("provider_id")?,
+        iteration_number: row.get("iteration_number")?,
+        output_type: row.get("output_type")?,
+        output_content: row.get("output_content")?,
+        tokens_used: row.get("tokens_used")?,
+        latency_ms: row.get("latency_ms")?,
+        cost_estimate: row.get("cost_estimate")?,
+        quality_score: row.get("quality_score")?,
+        status: row.get("status")?,
+        error_message: row.get("error_message")?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_model_comparison(row: &Row<'_>) -> rusqlite::Result<ModelComparison> {
+    Ok(ModelComparison {
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        comparison_type: row.get("comparison_type")?,
+        winner_provider_id: row.get("winner_provider_id")?,
+        comparison_json: row.get("comparison_json")?,
+        similarity_score: row.get("similarity_score")?,
+        key_differences: row.get("key_differences")?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_model_quality_score(row: &Row<'_>) -> rusqlite::Result<ModelQualityScore> {
+    Ok(ModelQualityScore {
+        id: row.get("id")?,
+        provider_id: row.get("provider_id")?,
+        total_runs: row.get("total_runs")?,
+        successful_runs: row.get("successful_runs")?,
+        avg_quality_score: row.get("avg_quality_score")?,
+        avg_latency_ms: row.get("avg_latency_ms")?,
+        total_tokens: row.get("total_tokens")?,
+        total_cost: row.get("total_cost")?,
+        accuracy_score: row.get("accuracy_score")?,
+        last_run_at: row
+            .get::<_, Option<String>>("last_run_at")?
+            .and_then(|s| parse_time(s).ok()),
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_price_snapshot(row: &Row<'_>) -> rusqlite::Result<PriceSnapshot> {
+    Ok(PriceSnapshot {
+        id: row.get("id")?,
+        ticker: row.get("ticker")?,
+        price_date: row
+            .get::<_, String>("price_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        open_price: row.get("open_price")?,
+        close_price: row.get("close_price")?,
+        high_price: row.get("high_price")?,
+        low_price: row.get("low_price")?,
+        volume: row.get("volume")?,
+        adjusted_close: row.get("adjusted_close")?,
+        source: row.get("source")?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_thesis_outcome(row: &Row<'_>) -> rusqlite::Result<ThesisOutcome> {
+    Ok(ThesisOutcome {
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        ticker: row.get("ticker")?,
+        thesis_date: row
+            .get::<_, String>("thesis_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        thesis_price: row.get("thesis_price")?,
+        return_1d: row.get("return_1d")?,
+        return_7d: row.get("return_7d")?,
+        return_30d: row.get("return_30d")?,
+        return_90d: row.get("return_90d")?,
+        return_180d: row.get("return_180d")?,
+        return_365d: row.get("return_365d")?,
+        price_1d: row.get("price_1d")?,
+        price_7d: row.get("price_7d")?,
+        price_30d: row.get("price_30d")?,
+        price_90d: row.get("price_90d")?,
+        price_180d: row.get("price_180d")?,
+        price_365d: row.get("price_365d")?,
+        thesis_direction: row.get("thesis_direction")?,
+        thesis_correct_1d: row
+            .get::<_, Option<i64>>("thesis_correct_1d")?
+            .map(|v| v > 0),
+        thesis_correct_7d: row
+            .get::<_, Option<i64>>("thesis_correct_7d")?
+            .map(|v| v > 0),
+        thesis_correct_30d: row
+            .get::<_, Option<i64>>("thesis_correct_30d")?
+            .map(|v| v > 0),
+        thesis_correct_90d: row
+            .get::<_, Option<i64>>("thesis_correct_90d")?
+            .map(|v| v > 0),
+        notes: row.get("notes")?,
+        last_updated: parse_time(row.get("last_updated")?)?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_thesis_accuracy(row: &Row<'_>) -> rusqlite::Result<ThesisAccuracy> {
+    Ok(ThesisAccuracy {
+        id: row.get("id")?,
+        ticker: row.get("ticker")?,
+        provider_id: row.get("provider_id")?,
+        time_horizon: row.get("time_horizon")?,
+        total_theses: row.get("total_theses")?,
+        correct_theses: row.get("correct_theses")?,
+        accuracy_rate: row.get("accuracy_rate")?,
+        avg_return: row.get("avg_return")?,
+        median_return: row.get("median_return")?,
+        best_return: row.get("best_return")?,
+        worst_return: row.get("worst_return")?,
+        sharpe_ratio: row.get("sharpe_ratio")?,
+        win_rate: row.get("win_rate")?,
+        avg_holding_days: row.get("avg_holding_days")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_source_reputation(row: &Row<'_>) -> rusqlite::Result<SourceReputation> {
+    Ok(SourceReputation {
+        id: row.get("id")?,
+        domain: row.get("domain")?,
+        reputation_score: row.get("reputation_score")?,
+        total_citations: row.get("total_citations")?,
+        successful_citations: row.get("successful_citations")?,
+        failed_citations: row.get("failed_citations")?,
+        avg_evidence_quality: row.get("avg_evidence_quality")?,
+        source_type: row.get("source_type")?,
+        bias_rating: row.get("bias_rating")?,
+        reliability_tier: row.get("reliability_tier")?,
+        notes: row.get("notes")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_evidence_outcome(row: &Row<'_>) -> rusqlite::Result<EvidenceOutcome> {
+    Ok(EvidenceOutcome {
+        id: row.get("id")?,
+        evidence_note_id: row.get("evidence_note_id")?,
+        run_id: row.get("run_id")?,
+        ticker: row.get("ticker")?,
+        claim_type: row.get("claim_type")?,
+        claim_text: row.get("claim_text")?,
+        outcome_type: row.get("outcome_type")?,
+        outcome_date: row
+            .get::<_, String>("outcome_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        price_at_claim: row.get("price_at_claim")?,
+        price_at_outcome: row.get("price_at_outcome")?,
+        return_since_claim: row.get("return_since_claim")?,
+        was_correct: row.get::<_, i64>("was_correct")? > 0,
+        confidence_at_claim: row.get("confidence_at_claim")?,
+        outcome_notes: row.get("outcome_notes")?,
+        verified_by: row.get("verified_by")?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_thesis_history(row: &Row<'_>) -> rusqlite::Result<ThesisHistory> {
+    Ok(ThesisHistory {
+        id: row.get("id")?,
+        run_id: row.get("run_id")?,
+        ticker: row.get("ticker")?,
+        thesis_date: row
+            .get::<_, String>("thesis_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        thesis_markdown: row.get("thesis_markdown")?,
+        thesis_html: row.get("thesis_html")?,
+        executive_summary: row.get("executive_summary")?,
+        bull_case: row.get("bull_case")?,
+        bear_case: row.get("bear_case")?,
+        key_catalysts: row.get("key_catalysts")?,
+        key_risks: row.get("key_risks")?,
+        conviction_level: row.get("conviction_level")?,
+        thesis_direction: row.get("thesis_direction")?,
+        model_provider_id: row.get("model_provider_id")?,
+        signals_json: row.get("signals_json")?,
+        iteration_number: row.get("iteration_number")?,
+        archived_at: parse_time(row.get("archived_at")?)?,
+    })
+}
+
+fn map_ticker_research_summary(row: &Row<'_>) -> rusqlite::Result<TickerResearchSummary> {
+    Ok(TickerResearchSummary {
+        id: row.get("id")?,
+        ticker: row.get("ticker")?,
+        first_research_date: row
+            .get::<_, Option<String>>("first_research_date")?
+            .and_then(|s| s.parse().ok()),
+        last_research_date: row
+            .get::<_, Option<String>>("last_research_date")?
+            .and_then(|s| s.parse().ok()),
+        total_research_runs: row.get("total_research_runs")?,
+        avg_conviction: row.get("avg_conviction")?,
+        avg_quality_score: row.get("avg_quality_score")?,
+        thesis_accuracy_30d: row.get("thesis_accuracy_30d")?,
+        thesis_accuracy_90d: row.get("thesis_accuracy_90d")?,
+        total_return_all_time: row.get("total_return_all_time")?,
+        best_return_90d: row.get("best_return_90d")?,
+        worst_return_90d: row.get("worst_return_90d")?,
+        research_frequency: row.get("research_frequency")?,
+        created_at: parse_time(row.get("created_at")?)?,
+        updated_at: parse_time(row.get("updated_at")?)?,
+    })
+}
+
+fn map_signal_effectiveness(row: &Row<'_>) -> rusqlite::Result<SignalEffectiveness> {
+    Ok(SignalEffectiveness {
+        id: row.get("id")?,
+        signal_type: row.get("signal_type")?,
+        signal_date: row
+            .get::<_, String>("signal_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        ticker: row.get("ticker")?,
+        signal_strength: row.get("signal_strength")?,
+        signal_description: row.get("signal_description")?,
+        outcome_type: row.get("outcome_type")?,
+        return_7d: row.get("return_7d")?,
+        return_30d: row.get("return_30d")?,
+        return_90d: row.get("return_90d")?,
+        was_predictive: row.get::<_, Option<i64>>("was_predictive")?.map(|v| v > 0),
+        thesis_run_id: row.get("thesis_run_id")?,
+        created_at: parse_time(row.get("created_at")?)?,
+    })
+}
+
+fn map_research_analytics(row: &Row<'_>) -> rusqlite::Result<ResearchAnalytics> {
+    Ok(ResearchAnalytics {
+        id: row.get("id")?,
+        analytics_date: row
+            .get::<_, String>("analytics_date")?
+            .parse()
+            .ok()
+            .unwrap_or_default(),
+        total_runs: row.get("total_runs")?,
+        total_theses: row.get("total_theses")?,
+        avg_conviction: row.get("avg_conviction")?,
+        avg_iteration_count: row.get("avg_iteration_count")?,
+        avg_source_count: row.get("avg_source_count")?,
+        avg_evidence_count: row.get("avg_evidence_count")?,
+        avg_quality_score: row.get("avg_quality_score")?,
+        thesis_accuracy_30d: row.get("thesis_accuracy_30d")?,
+        thesis_accuracy_90d: row.get("thesis_accuracy_90d")?,
+        top_performing_ticker: row.get("top_performing_ticker")?,
+        worst_performing_ticker: row.get("worst_performing_ticker")?,
+        best_model_provider_id: row.get("best_model_provider_id")?,
+        model_accuracy_ranking_json: row.get("model_accuracy_ranking_json")?,
+        created_at: parse_time(row.get("created_at")?)?,
     })
 }
