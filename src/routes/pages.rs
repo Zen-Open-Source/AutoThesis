@@ -117,6 +117,11 @@ struct DashboardTemplate {
     generated_at: String,
     active_alerts: Vec<DashboardAlertView>,
     rows: Vec<DashboardRowView>,
+    schedule_enabled: bool,
+    schedule_interval_hours: i64,
+    schedule_template_id: String,
+    last_refresh_at: String,
+    next_refresh_at: String,
 }
 
 pub async fn dashboard_index(
@@ -144,6 +149,11 @@ pub async fn dashboard_index(
             generated_at: String::new(),
             active_alerts: Vec::new(),
             rows: Vec::new(),
+            schedule_enabled: false,
+            schedule_interval_hours: 168,
+            schedule_template_id: String::new(),
+            last_refresh_at: String::new(),
+            next_refresh_at: String::new(),
         }
         .render()
         .map_err(|error| AppError::Internal(error.into()))?;
@@ -204,6 +214,35 @@ pub async fn dashboard_index(
         })
         .collect::<Vec<_>>();
 
+    // Fetch schedule data
+    let schedule = state
+        .db
+        .get_watchlist_schedule(&selected_watchlist.id)
+        .await
+        .map_err(AppError::from)?;
+
+    let (
+        schedule_enabled,
+        schedule_interval_hours,
+        schedule_template_id,
+        last_refresh_at,
+        next_refresh_at,
+    ) = if let Some(s) = schedule {
+        (
+            s.refresh_enabled,
+            s.refresh_interval_hours,
+            s.refresh_template_id.unwrap_or_default(),
+            s.last_refresh_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+            s.next_refresh_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+        )
+    } else {
+        (false, 168, String::new(), String::new(), String::new())
+    };
+
     let html = DashboardTemplate {
         watchlists,
         run_templates,
@@ -213,6 +252,11 @@ pub async fn dashboard_index(
         generated_at: dashboard.generated_at.to_rfc3339(),
         active_alerts,
         rows,
+        schedule_enabled,
+        schedule_interval_hours,
+        schedule_template_id,
+        last_refresh_at,
+        next_refresh_at,
     }
     .render()
     .map_err(|error| AppError::Internal(error.into()))?;

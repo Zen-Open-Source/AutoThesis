@@ -1004,3 +1004,40 @@ pub struct TickerHistoryDetail {
     pub outcomes: Vec<ThesisOutcome>,
     pub signal_history: Vec<SignalEffectiveness>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistSchedule {
+    pub watchlist_id: String,
+    pub refresh_enabled: bool,
+    pub refresh_interval_hours: i64,
+    pub last_refresh_at: Option<DateTime<Utc>>,
+    pub next_refresh_at: Option<DateTime<Utc>>,
+    pub refresh_template_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledRun {
+    pub id: String,
+    pub watchlist_id: String,
+    pub ticker: String,
+    pub run_id: String,
+    pub scheduled_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateWatchlistScheduleRequest {
+    pub enabled: bool,
+    pub interval_hours: i64,
+    pub template_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistScheduleResponse {
+    pub watchlist: Watchlist,
+    pub schedule: WatchlistSchedule,
+    pub scheduled_runs: Vec<ScheduledRun>,
+}

@@ -63,6 +63,56 @@
 </section>
 
 {% if has_selected_watchlist %}
+<section class="panel">
+  <h2>Auto-refresh schedule</h2>
+  <p>Automatically refresh research for all tickers in this watchlist on a schedule.</p>
+
+  <div id="schedule-data"
+       data-enabled="{{ schedule_enabled }}"
+       data-interval="{{ schedule_interval_hours }}"
+       data-template-id="{{ schedule_template_id }}"
+       data-last-refresh="{{ last_refresh_at }}"
+       data-next-refresh="{{ next_refresh_at }}"
+       class="hidden"></div>
+
+  <div class="form-grid">
+    <label>
+      <span>Enable auto-refresh</span>
+      <select id="schedule-enabled">
+        <option value="false">Disabled</option>
+        <option value="true">Enabled</option>
+      </select>
+    </label>
+    <label>
+      <span>Refresh interval</span>
+      <select id="schedule-interval">
+        <option value="24">Daily</option>
+        <option value="168">Weekly</option>
+        <option value="72">Every 3 days</option>
+        <option value="336">Every 2 weeks</option>
+      </select>
+    </label>
+    <label>
+      <span>Research template</span>
+      <select id="schedule-template">
+        <option value="">Default question</option>
+        {% for template in run_templates %}
+          <option value="{{ template.id }}">{{ template.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="comparison-actions">
+    <button type="button" class="compact-button" id="save-schedule">Save schedule</button>
+    <button type="button" class="secondary-button compact-button" id="trigger-refresh">Refresh now</button>
+  </div>
+  <p id="schedule-error" class="error-text hidden"></p>
+  <p id="schedule-success" class="success-text hidden"></p>
+</section>
+{% endif %}
+
+{% if has_selected_watchlist %}
   <section class="panel">
     <h2>Active alerts</h2>
     {% if active_alerts.len() == 0 %}
@@ -283,6 +333,81 @@
       window.location.reload();
     });
   });
+
+  // Schedule controls
+  const scheduleDataEl = document.getElementById('schedule-data');
+  if (scheduleDataEl) {
+    // Initialize form values from data attributes
+    const enabled = scheduleDataEl.dataset.enabled === 'true';
+    const interval = scheduleDataEl.dataset.interval;
+    const templateId = scheduleDataEl.dataset.templateId;
+
+    document.getElementById('schedule-enabled').value = enabled ? 'true' : 'false';
+    document.getElementById('schedule-interval').value = interval;
+    if (templateId) {
+      document.getElementById('schedule-template').value = templateId;
+    }
+  }
+
+  const saveScheduleBtn = document.getElementById('save-schedule');
+  const triggerRefreshBtn = document.getElementById('trigger-refresh');
+  const scheduleError = document.getElementById('schedule-error');
+  const scheduleSuccess = document.getElementById('schedule-success');
+
+  if (saveScheduleBtn && selectedWatchlistId) {
+    saveScheduleBtn.addEventListener('click', async () => {
+      scheduleError.classList.add('hidden');
+      scheduleSuccess.classList.add('hidden');
+
+      const enabled = document.getElementById('schedule-enabled').value === 'true';
+      const intervalHours = parseInt(document.getElementById('schedule-interval').value, 10);
+      const templateId = document.getElementById('schedule-template').value || null;
+
+      const response = await fetch(`/api/watchlists/${encodeURIComponent(selectedWatchlistId)}/schedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled,
+          interval_hours: intervalHours,
+          template_id: templateId
+        })
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: 'Failed to save schedule' }));
+        scheduleError.textContent = body.error || 'Failed to save schedule';
+        scheduleError.classList.remove('hidden');
+        return;
+      }
+
+      scheduleSuccess.textContent = 'Schedule saved successfully';
+      scheduleSuccess.classList.remove('hidden');
+      setTimeout(() => window.location.reload(), 1000);
+    });
+  }
+
+  if (triggerRefreshBtn && selectedWatchlistId) {
+    triggerRefreshBtn.addEventListener('click', async () => {
+      scheduleError.classList.add('hidden');
+      scheduleSuccess.classList.add('hidden');
+
+      const response = await fetch(`/api/watchlists/${encodeURIComponent(selectedWatchlistId)}/schedule/trigger`, {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: 'Failed to trigger refresh' }));
+        scheduleError.textContent = body.error || 'Failed to trigger refresh';
+        scheduleError.classList.remove('hidden');
+        return;
+      }
+
+      const body = await response.json();
+      scheduleSuccess.textContent = `Refresh triggered - ${body.runs_spawned} runs started`;
+      scheduleSuccess.classList.remove('hidden');
+      setTimeout(() => window.location.reload(), 1500);
+    });
+  }
 
   const hasPending = [...document.querySelectorAll('.dashboard-card')].some((card) => {
     const status = card.dataset.status;

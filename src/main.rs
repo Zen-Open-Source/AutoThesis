@@ -1,5 +1,5 @@
 use anyhow::Result;
-use autothesis::{build_app, build_state_from_env};
+use autothesis::{build_app, build_state_from_env, services::scheduler};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -10,6 +10,10 @@ async fn main() -> Result<()> {
         .init();
 
     let state = build_state_from_env().await?;
+
+    // Start the scheduler background loop
+    let _active_runs = scheduler::start_scheduler(state.clone());
+
     let address = state.config.address();
     let listener = TcpListener::bind(&address).await?;
     info!(%address, "listening");

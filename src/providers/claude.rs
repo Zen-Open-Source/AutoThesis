@@ -1,9 +1,9 @@
 use crate::providers::llm::LlmProvider;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -45,7 +45,7 @@ impl ClaudeProvider {
         user_prompt: &str,
         json_mode: bool,
     ) -> Result<String> {
-        let mut messages = vec![ClaudeMessage {
+        let messages = vec![ClaudeMessage {
             role: "user".to_string(),
             content: user_prompt.to_string(),
         }];

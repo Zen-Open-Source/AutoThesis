@@ -10,6 +10,7 @@ pub mod planner;
 pub mod preliminary_thesis;
 pub mod reader;
 pub mod scanner;
+pub mod scheduler;
 pub mod search;
 pub mod signal_detector;
 pub mod source_ranker;

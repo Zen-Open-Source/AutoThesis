@@ -7,6 +7,7 @@ pub mod pages;
 pub mod run_templates;
 pub mod runs;
 pub mod scanner;
+pub mod scheduler;
 pub mod watchlists;
 
 use crate::app_state::AppState;
@@ -128,6 +129,22 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/scanner/universe",
             get(scanner::list_ticker_universe).post(scanner::add_ticker_to_universe),
+        )
+        .route(
+            "/api/watchlists/:id/schedule",
+            get(scheduler::get_watchlist_schedule).put(scheduler::update_watchlist_schedule),
+        )
+        .route(
+            "/api/watchlists/:id/schedule/pause",
+            post(scheduler::pause_watchlist_schedule),
+        )
+        .route(
+            "/api/watchlists/:id/schedule/resume",
+            post(scheduler::resume_watchlist_schedule),
+        )
+        .route(
+            "/api/watchlists/:id/schedule/trigger",
+            post(scheduler::trigger_refresh),
         )
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())

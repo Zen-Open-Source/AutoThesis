@@ -120,7 +120,7 @@ struct OllamaRequest {
     options: Option<OllamaOptions>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct OllamaMessage {
     role: String,
     content: String,
