@@ -85,6 +85,17 @@ AutoThesis supports both light and dark themes:
 - Click the sun/moon icon in the header to manually toggle themes.
 - Your preference is saved in browser localStorage and persists across sessions.
 
+### Scheduled Auto-Refresh
+
+Automatically refresh research for watchlist tickers on a configurable schedule:
+
+1. Navigate to the **Decision Dashboard**.
+2. In the **Auto-refresh schedule** section, enable auto-refresh.
+3. Select an interval (daily, weekly, etc.) and optionally a research template.
+4. Click **Save schedule**.
+
+The scheduler will automatically spawn research runs for all tickers in the watchlist at the specified interval. Use the **Refresh now** button to trigger an immediate refresh.
+
 ## Example questions
 
 - What is the current bull and bear case for `NVDA`?
@@ -106,6 +117,13 @@ See `.env.example` for the full list. The main ones are:
 - `MAX_ITERATIONS`
 - `MAX_SOURCES_PER_ITERATION`
 - `RUST_LOG`
+
+Scheduler settings:
+
+- `SCHEDULER_ENABLED` - Enable/disable auto-refresh scheduler (default: `true`)
+- `SCHEDULER_CHECK_INTERVAL_SECS` - How often to check for due watchlists (default: `60`)
+- `SCHEDULER_MAX_CONCURRENT_RUNS` - Maximum concurrent research runs (default: `3`)
+- `SCHEDULER_MIN_TICKER_AGE_HOURS` - Skip tickers refreshed within this window (default: `24`)
 
 ## Development checks
 
