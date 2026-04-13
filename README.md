@@ -96,6 +96,22 @@ Automatically refresh research for watchlist tickers on a configurable schedule:
 
 The scheduler will automatically spawn research runs for all tickers in the watchlist at the specified interval. Use the **Refresh now** button to trigger an immediate refresh.
 
+### Portfolio Tracking
+
+Track your actual holdings alongside research theses:
+
+1. Navigate to the **Portfolios** page.
+2. Create a new portfolio with a name and optional cash balance.
+3. Add positions by entering ticker, shares, and cost basis.
+4. View the holdings table with:
+   - Current price and market value
+   - Gain/loss ($ and %)
+   - Allocation percentage
+   - Latest thesis conviction score
+   - Conviction alignment indicator (green/yellow/red)
+
+The conviction alignment feature alerts you when a position's thesis conviction drops below 6.0 but the position is still held, helping you stay aligned between your research and actual investments.
+
 ## Example questions
 
 - What is the current bull and bear case for `NVDA`?
