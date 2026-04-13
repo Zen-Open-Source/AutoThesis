@@ -1,0 +1,295 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ portfolio.name }} - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>{{ portfolio.name }}</h1>
+    <button type="button" class="secondary-button compact-button" onclick="showAddPositionModal()">
+      Add position
+    </button>
+  </div>
+  {% if portfolio.has_description %}
+    <p>{{ portfolio.description }}</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Summary</h2>
+  <div class="dashboard-stats">
+    <div class="stat-card">
+      <div class="stat-label">Total Value</div>
+      <div class="stat-value">{{ summary.total_value_text }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Market Value</div>
+      <div class="stat-value">{{ summary.total_market_value_text }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Cash</div>
+      <div class="stat-value">{{ summary.cash_balance_text }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Cost Basis</div>
+      <div class="stat-value">{{ summary.total_cost_text }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Gain/Loss</div>
+      <div class="stat-value {% if summary.total_gain_loss_text.starts_with('+') %}positive{% else %}negative{% endif %}">{{ summary.total_gain_loss_text }}</div>
+      <div class="stat-detail">{{ summary.total_gain_loss_pct_text }}</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Holdings</h2>
+  {% if positions.len() == 0 %}
+    <p>No positions yet.</p>
+    <button type="button" class="compact-button" onclick="showAddPositionModal()">
+      Add first position
+    </button>
+  {% else %}
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Shares</th>
+            <th>Cost Basis</th>
+            <th>Total Cost</th>
+            <th>Current Price</th>
+            <th>Market Value</th>
+            <th>Gain/Loss</th>
+            <th>Allocation</th>
+            <th>Conviction</th>
+            <th>Opened</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for position in positions %}
+            <tr>
+              <td>
+                <strong>{{ position.ticker }}</strong>
+                {% if position.has_latest_run %}
+                  <a href="/runs/{{ position.latest_run_id }}" class="small-link">View thesis</a>
+                {% endif %}
+              </td>
+              <td>{{ position.shares_text }}</td>
+              <td>{{ position.cost_basis_text }}</td>
+              <td>{{ position.total_cost_text }}</td>
+              <td>{{ position.current_price_text }}</td>
+              <td>{{ position.market_value_text }}</td>
+              <td class="{% if position.gain_loss_text.starts_with('+') %}positive{% else %}{% if position.gain_loss_text.starts_with('-') %}negative{% endif %}{% endif %}">
+                {{ position.gain_loss_text }}
+                <small>{{ position.gain_loss_pct_text }}</small>
+              </td>
+              <td>{{ position.allocation_pct_text }}</td>
+              <td>
+                <span class="badge {{ position.conviction_badge_class }}">{{ position.conviction_text }}</span>
+              </td>
+              <td>{{ position.opened_at_text }}</td>
+              <td>
+                <button type="button" class="secondary-button compact-button small-button" onclick="closePosition('{{ position.id }}', '{{ position.ticker }}')">
+                  Close
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="compact-button" onclick="evaluateConviction()">
+      Evaluate Conviction Alignment
+    </button>
+  {% endif %}
+</section>
+
+{% if transactions.len() > 0 %}
+<section class="panel">
+  <h2>Recent Transactions</h2>
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Ticker</th>
+          <th>Type</th>
+          <th>Shares</th>
+          <th>Price</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for transaction in transactions %}
+          <tr>
+            <td>{{ transaction.executed_at_text }}</td>
+            <td><strong>{{ transaction.ticker }}</strong></td>
+            <td>
+              <span class="badge {% if transaction.transaction_type == "buy" %}badge-success{% else %}badge-warning{% endif %}">
+                {{ transaction.transaction_type }}
+              </span>
+            </td>
+            <td>{{ transaction.shares_text }}</td>
+            <td>{{ transaction.price_per_share_text }}</td>
+            <td>{{ transaction.total_amount_text }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<div id="addPositionModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <h3>Add position</h3>
+    <form id="positionForm" class="form-grid">
+      <label>
+        <span>Ticker</span>
+        <input type="text" id="positionTicker" name="ticker" required placeholder="NVDA" maxlength="12" />
+      </label>
+      <label>
+        <span>Shares</span>
+        <input type="number" id="positionShares" name="shares" step="0.0001" min="0.0001" required />
+      </label>
+      <label>
+        <span>Cost basis per share ($)</span>
+        <input type="number" id="positionCostBasis" name="cost_basis_per_share" step="0.01" min="0.01" required />
+      </label>
+      <label>
+        <span>Date opened (optional)</span>
+        <input type="date" id="positionOpenedAt" name="opened_at" />
+      </label>
+      <label>
+        <span>Notes (optional)</span>
+        <input type="text" id="positionNotes" name="notes" />
+      </label>
+      <p id="position-form-error" class="error-text hidden"></p>
+      <div class="modal-actions">
+        <button type="button" class="secondary-button compact-button" onclick="hideAddPositionModal()">Cancel</button>
+        <button type="submit" class="compact-button">Add position</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="closePositionModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <h3>Close position</h3>
+    <p>Are you sure you want to close this position?</p>
+    <form id="closePositionForm" class="form-grid">
+      <input type="hidden" id="closePositionId" />
+      <label>
+        <span>Close date</span>
+        <input type="date" id="closeDate" name="closed_at" required />
+      </label>
+      <label>
+        <span>Notes (optional)</span>
+        <input type="text" id="closeNotes" name="notes" />
+      </label>
+      <p id="close-form-error" class="error-text hidden"></p>
+      <div class="modal-actions">
+        <button type="button" class="secondary-button compact-button" onclick="hideClosePositionModal()">Cancel</button>
+        <button type="submit" class="compact-button">Close position</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  const portfolioId = '{{ portfolio.id }}';
+
+  function showAddPositionModal() {
+    document.getElementById('addPositionModal').classList.remove('hidden');
+    document.getElementById('positionOpenedAt').value = new Date().toISOString().split('T')[0];
+  }
+
+  function hideAddPositionModal() {
+    document.getElementById('addPositionModal').classList.add('hidden');
+  }
+
+  document.getElementById('positionForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorEl = document.getElementById('position-form-error');
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+
+    const ticker = document.getElementById('positionTicker').value.trim().toUpperCase();
+    const shares = parseFloat(document.getElementById('positionShares').value);
+    const costBasis = parseFloat(document.getElementById('positionCostBasis').value);
+    const openedAt = document.getElementById('positionOpenedAt').value || null;
+    const notes = document.getElementById('positionNotes').value.trim() || null;
+
+    const response = await fetch(`/api/portfolios/${portfolioId}/positions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker,
+        shares,
+        cost_basis_per_share: costBasis,
+        opened_at: openedAt,
+        notes
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to add position' }));
+      errorEl.textContent = body.error || 'Failed to add position';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    window.location.reload();
+  });
+
+  function closePosition(positionId, ticker) {
+    document.getElementById('closePositionId').value = positionId;
+    document.getElementById('closeDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('closePositionModal').classList.remove('hidden');
+  }
+
+  function hideClosePositionModal() {
+    document.getElementById('closePositionModal').classList.add('hidden');
+  }
+
+  document.getElementById('closePositionForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorEl = document.getElementById('close-form-error');
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+
+    const positionId = document.getElementById('closePositionId').value;
+    const closedAt = document.getElementById('closeDate').value;
+    const notes = document.getElementById('closeNotes').value.trim() || null;
+
+    const response = await fetch(`/api/positions/${positionId}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        closed_at: closedAt,
+        notes
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to close position' }));
+      errorEl.textContent = body.error || 'Failed to close position';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    window.location.reload();
+  });
+
+  async function evaluateConviction() {
+    const response = await fetch(`/api/portfolios/${portfolioId}/evaluate`, {
+      method: 'POST'
+    });
+    if (response.ok) {
+      window.location.reload();
+    }
+  }
+</script>
+{% endblock %}

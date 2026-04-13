@@ -4,6 +4,7 @@ pub mod bookmarks;
 pub mod comparisons;
 pub mod health;
 pub mod pages;
+pub mod portfolios;
 pub mod run_templates;
 pub mod runs;
 pub mod scanner;
@@ -37,6 +38,8 @@ pub fn router(state: AppState) -> Router {
             "/scanner/opportunities/:id",
             get(pages::scanner_opportunity_detail),
         )
+        .route("/portfolios", get(pages::portfolios_index))
+        .route("/portfolios/:id", get(pages::portfolio_detail))
         .route("/healthz", get(health::healthz))
         .route("/api/runs", post(runs::create_run).get(runs::list_runs))
         .route("/api/runs/:id", get(runs::get_run))
@@ -145,6 +148,25 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/watchlists/:id/schedule/trigger",
             post(scheduler::trigger_refresh),
+        )
+        .route(
+            "/api/portfolios",
+            get(portfolios::list_portfolios).post(portfolios::create_portfolio),
+        )
+        .route(
+            "/api/portfolios/:id",
+            get(portfolios::get_portfolio)
+                .put(portfolios::update_portfolio)
+                .delete(portfolios::delete_portfolio),
+        )
+        .route(
+            "/api/portfolios/:id/positions",
+            post(portfolios::create_position),
+        )
+        .route("/api/positions/:id/close", post(portfolios::close_position))
+        .route(
+            "/api/portfolios/:id/evaluate",
+            post(portfolios::evaluate_conviction),
         )
         .nest_service("/static", ServeDir::new("static"))
         .layer(TraceLayer::new_for_http())

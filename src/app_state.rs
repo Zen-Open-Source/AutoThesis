@@ -5,6 +5,7 @@ use crate::{
         fetch::{ReqwestWebFetcher, WebFetcher},
         llm::LlmProvider,
         openai::OpenAiProvider,
+        price::PriceProvider,
         search::SearchProvider,
         tavily::TavilySearchProvider,
     },
@@ -59,6 +60,7 @@ pub struct AppState {
     pub search: Arc<dyn SearchProvider>,
     pub fetcher: Arc<dyn WebFetcher>,
     pub prompts: PromptStore,
+    pub price_provider: PriceProvider,
 }
 
 impl AppState {
@@ -69,6 +71,7 @@ impl AppState {
         search: Arc<dyn SearchProvider>,
         fetcher: Arc<dyn WebFetcher>,
         prompts: PromptStore,
+        price_provider: PriceProvider,
     ) -> Self {
         Self {
             config: Arc::new(config),
@@ -77,6 +80,7 @@ impl AppState {
             search,
             fetcher,
             prompts,
+            price_provider,
         }
     }
 
@@ -110,7 +114,16 @@ impl AppState {
         };
 
         let fetcher = Arc::new(ReqwestWebFetcher::new()?);
+        let price_provider = PriceProvider::new()?;
 
-        Ok(Self::new(config, db, llm, search, fetcher, prompts))
+        Ok(Self::new(
+            config,
+            db,
+            llm,
+            search,
+            fetcher,
+            prompts,
+            price_provider,
+        ))
     }
 }

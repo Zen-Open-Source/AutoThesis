@@ -1,0 +1,106 @@
+{% extends "layout.html" %}
+
+{% block title %}Portfolios - AutoThesis{% endblock %}
+
+{% block content %}
+<section class="panel hero">
+  <div class="panel-row">
+    <h1>Portfolios</h1>
+    <button type="button" class="secondary-button compact-button" onclick="showNewPortfolioModal()">
+      New portfolio
+    </button>
+  </div>
+  <p>Track your holdings and compare thesis conviction with position sizes.</p>
+</section>
+
+<section class="panel">
+  <h2>Your portfolios</h2>
+  {% if portfolios.len() == 0 %}
+    <p>No portfolios yet.</p>
+    <button type="button" class="compact-button" onclick="showNewPortfolioModal()">
+      Create first portfolio
+    </button>
+  {% else %}
+    <div class="run-list">
+      {% for portfolio in portfolios %}
+        <a class="run-card comparison-card" href="/portfolios/{{ portfolio.id }}">
+          <div class="comparison-card-head">
+            <strong>{{ portfolio.name }}</strong>
+            <span class="badge badge-secondary">{{ portfolio.position_count }} positions</span>
+          </div>
+          {% if portfolio.has_description %}
+            <p>{{ portfolio.description }}</p>
+          {% endif %}
+          <small>Cash: {{ portfolio.cash_balance_text }} · Updated {{ portfolio.updated_at_text }}</small>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<div id="newPortfolioModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <h3>Create new portfolio</h3>
+    <form id="portfolioForm" class="form-grid">
+      <label>
+        <span>Name</span>
+        <input type="text" id="portfolioName" name="name" required placeholder="Main Account" />
+      </label>
+      <label>
+        <span>Description (optional)</span>
+        <input type="text" id="portfolioDescription" name="description" placeholder="Taxable brokerage account" />
+      </label>
+      <label>
+        <span>Cash balance</span>
+        <input type="number" id="portfolioCash" name="cash_balance" step="0.01" min="0" value="0" />
+      </label>
+      <p id="portfolio-form-error" class="error-text hidden"></p>
+      <div class="modal-actions">
+        <button type="button" class="secondary-button compact-button" onclick="hideNewPortfolioModal()">Cancel</button>
+        <button type="submit" class="compact-button">Create portfolio</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function showNewPortfolioModal() {
+    document.getElementById('newPortfolioModal').classList.remove('hidden');
+  }
+
+  function hideNewPortfolioModal() {
+    document.getElementById('newPortfolioModal').classList.add('hidden');
+  }
+
+  document.getElementById('portfolioForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorEl = document.getElementById('portfolio-form-error');
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+
+    const name = document.getElementById('portfolioName').value.trim();
+    const description = document.getElementById('portfolioDescription').value.trim();
+    const cashBalance = parseFloat(document.getElementById('portfolioCash').value) || 0;
+
+    const response = await fetch('/api/portfolios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        description: description || null,
+        cash_balance: cashBalance
+      })
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: 'Failed to create portfolio' }));
+      errorEl.textContent = body.error || 'Failed to create portfolio';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const body = await response.json();
+    window.location.href = `/portfolios/${body.id}`;
+  });
+</script>
+{% endblock %}

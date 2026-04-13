@@ -9,6 +9,7 @@ use autothesis::{
     providers::{
         fetch::{FetchedPage, WebFetcher},
         llm::LlmProvider,
+        price::PriceProvider,
         search::{SearchProvider, SearchResultItem},
     },
 };
@@ -1142,6 +1143,7 @@ impl TestContext {
 
         let database = Database::connect(&database_url).await?;
         let prompts = PromptStore::load_default()?;
+        let price_provider = PriceProvider::new()?;
         let state = AppState::new(
             config,
             database,
@@ -1149,6 +1151,7 @@ impl TestContext {
             Arc::new(MockSearchProvider::new(include_failure)),
             Arc::new(MockFetcher::new(include_failure)),
             prompts,
+            price_provider,
         );
         let app = build_app(state.clone());
 

@@ -1041,3 +1041,106 @@ pub struct WatchlistScheduleResponse {
     pub schedule: WatchlistSchedule,
     pub scheduled_runs: Vec<ScheduledRun>,
 }
+
+// Portfolio models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Portfolio {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub cash_balance: f64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePortfolioRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub cash_balance: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatePortfolioRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub cash_balance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Position {
+    pub id: String,
+    pub portfolio_id: String,
+    pub ticker: String,
+    pub shares: f64,
+    pub cost_basis_per_share: f64,
+    pub total_cost: f64,
+    pub opened_at: chrono::NaiveDate,
+    pub closed_at: Option<chrono::NaiveDate>,
+    pub notes: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePositionRequest {
+    pub ticker: String,
+    pub shares: f64,
+    pub cost_basis_per_share: f64,
+    pub opened_at: Option<chrono::NaiveDate>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosePositionRequest {
+    pub closed_at: chrono::NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionWithDetails {
+    pub position: Position,
+    pub current_price: Option<f64>,
+    pub market_value: Option<f64>,
+    pub gain_loss: Option<f64>,
+    pub gain_loss_pct: Option<f64>,
+    pub allocation_pct: Option<f64>,
+    pub latest_conviction: Option<f64>,
+    pub conviction_alignment: String,
+    pub latest_run_id: Option<String>,
+    pub latest_run_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: String,
+    pub portfolio_id: String,
+    pub ticker: String,
+    pub transaction_type: String,
+    pub shares: f64,
+    pub price_per_share: f64,
+    pub total_amount: f64,
+    pub executed_at: chrono::NaiveDate,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioSummary {
+    pub total_market_value: f64,
+    pub total_cost: f64,
+    pub total_gain_loss: f64,
+    pub total_gain_loss_pct: f64,
+    pub cash_balance: f64,
+    pub total_value: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioDetail {
+    pub portfolio: Portfolio,
+    pub positions: Vec<PositionWithDetails>,
+    pub summary: PortfolioSummary,
+    pub recent_transactions: Vec<Transaction>,
+}

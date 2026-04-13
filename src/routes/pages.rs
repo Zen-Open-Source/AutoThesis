@@ -892,3 +892,239 @@ pub async fn scanner_opportunity_detail(
 fn format_timestamp(dt: chrono::DateTime<chrono::Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M UTC").to_string()
 }
+
+// Portfolio pages
+
+#[derive(Template)]
+#[template(path = "portfolios.html")]
+struct PortfoliosTemplate {
+    portfolios: Vec<PortfolioView>,
+}
+
+#[derive(Clone)]
+struct PortfolioView {
+    id: String,
+    name: String,
+    has_description: bool,
+    description: String,
+    position_count: i32,
+    cash_balance_text: String,
+    updated_at_text: String,
+}
+
+#[derive(Template)]
+#[template(path = "portfolio.html")]
+struct PortfolioDetailTemplate {
+    portfolio: PortfolioView,
+    positions: Vec<PositionView>,
+    summary: PortfolioSummaryView,
+    transactions: Vec<TransactionView>,
+}
+
+#[derive(Clone)]
+struct PositionView {
+    id: String,
+    ticker: String,
+    shares_text: String,
+    cost_basis_text: String,
+    total_cost_text: String,
+    current_price_text: String,
+    market_value_text: String,
+    gain_loss_text: String,
+    gain_loss_pct_text: String,
+    allocation_pct_text: String,
+    conviction_text: String,
+    conviction_alignment: String,
+    conviction_badge_class: String,
+    has_latest_run: bool,
+    latest_run_id: String,
+    latest_run_status: String,
+    opened_at_text: String,
+    has_notes: bool,
+    notes: String,
+}
+
+#[derive(Clone)]
+struct PortfolioSummaryView {
+    total_market_value_text: String,
+    total_cost_text: String,
+    total_gain_loss_text: String,
+    total_gain_loss_pct_text: String,
+    cash_balance_text: String,
+    total_value_text: String,
+}
+
+#[derive(Clone)]
+struct TransactionView {
+    id: String,
+    ticker: String,
+    transaction_type: String,
+    shares_text: String,
+    price_per_share_text: String,
+    total_amount_text: String,
+    executed_at_text: String,
+    has_notes: bool,
+    notes: String,
+}
+
+pub async fn portfolios_index(State(state): State<AppState>) -> AppResult<Html<String>> {
+    let portfolios = state
+        .db
+        .list_portfolios(100)
+        .await
+        .map_err(AppError::from)?;
+
+    let mut portfolio_views = Vec::new();
+    for portfolio in portfolios {
+        let positions = state
+            .db
+            .list_active_positions(&portfolio.id)
+            .await
+            .map_err(AppError::from)?;
+        portfolio_views.push(PortfolioView {
+            id: portfolio.id,
+            name: portfolio.name,
+            has_description: portfolio.description.is_some(),
+            description: portfolio.description.unwrap_or_default(),
+            position_count: positions.len() as i32,
+            cash_balance_text: format_currency(portfolio.cash_balance),
+            updated_at_text: format_timestamp(portfolio.updated_at),
+        });
+    }
+
+    Ok(Html(
+        PortfoliosTemplate {
+            portfolios: portfolio_views,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
+pub async fn portfolio_detail(
+    Path(portfolio_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Html<String>> {
+    let detail = crate::services::portfolio::build_portfolio_detail(&state, &portfolio_id)
+        .await
+        .map_err(AppError::from)?;
+
+    let portfolio_view = PortfolioView {
+        id: detail.portfolio.id.clone(),
+        name: detail.portfolio.name.clone(),
+        has_description: detail.portfolio.description.is_some(),
+        description: detail.portfolio.description.clone().unwrap_or_default(),
+        position_count: detail.positions.len() as i32,
+        cash_balance_text: format_currency(detail.portfolio.cash_balance),
+        updated_at_text: format_timestamp(detail.portfolio.updated_at),
+    };
+
+    let position_views: Vec<PositionView> = detail
+        .positions
+        .into_iter()
+        .map(|p| {
+            let conviction_badge_class = match p.conviction_alignment.as_str() {
+                "aligned" => "badge-success",
+                "moderate" => "badge-warning",
+                "mismatch" => "badge-danger",
+                "low_conviction" => "badge-danger",
+                _ => "badge-secondary",
+            };
+            PositionView {
+                id: p.position.id,
+                ticker: p.position.ticker,
+                shares_text: format_shares(p.position.shares),
+                cost_basis_text: format_currency(p.position.cost_basis_per_share),
+                total_cost_text: format_currency(p.position.total_cost),
+                current_price_text: p
+                    .current_price
+                    .map(format_currency)
+                    .unwrap_or_else(|| "-".to_string()),
+                market_value_text: p
+                    .market_value
+                    .map(format_currency)
+                    .unwrap_or_else(|| "-".to_string()),
+                gain_loss_text: p
+                    .gain_loss
+                    .map(|g| format_currency_signed(g))
+                    .unwrap_or_else(|| "-".to_string()),
+                gain_loss_pct_text: p
+                    .gain_loss_pct
+                    .map(|g| format!("{:.1}%", g))
+                    .unwrap_or_else(|| "-".to_string()),
+                allocation_pct_text: p
+                    .allocation_pct
+                    .map(|a| format!("{:.1}%", a))
+                    .unwrap_or_else(|| "-".to_string()),
+                conviction_text: p
+                    .latest_conviction
+                    .map(|c| format!("{:.1}/10", c))
+                    .unwrap_or_else(|| "No thesis".to_string()),
+                conviction_alignment: p.conviction_alignment.clone(),
+                conviction_badge_class: conviction_badge_class.to_string(),
+                has_latest_run: p.latest_run_id.is_some(),
+                latest_run_id: p.latest_run_id.unwrap_or_default(),
+                latest_run_status: p.latest_run_status.unwrap_or_default(),
+                opened_at_text: p.position.opened_at.to_string(),
+                has_notes: p.position.notes.is_some(),
+                notes: p.position.notes.unwrap_or_default(),
+            }
+        })
+        .collect();
+
+    let summary_view = PortfolioSummaryView {
+        total_market_value_text: format_currency(detail.summary.total_market_value),
+        total_cost_text: format_currency(detail.summary.total_cost),
+        total_gain_loss_text: format_currency_signed(detail.summary.total_gain_loss),
+        total_gain_loss_pct_text: format!("{:.1}%", detail.summary.total_gain_loss_pct),
+        cash_balance_text: format_currency(detail.summary.cash_balance),
+        total_value_text: format_currency(detail.summary.total_value),
+    };
+
+    let transaction_views: Vec<TransactionView> = detail
+        .recent_transactions
+        .into_iter()
+        .map(|t| TransactionView {
+            id: t.id,
+            ticker: t.ticker,
+            transaction_type: t.transaction_type,
+            shares_text: format_shares(t.shares),
+            price_per_share_text: format_currency(t.price_per_share),
+            total_amount_text: format_currency(t.total_amount),
+            executed_at_text: t.executed_at.to_string(),
+            has_notes: t.notes.is_some(),
+            notes: t.notes.unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(Html(
+        PortfolioDetailTemplate {
+            portfolio: portfolio_view,
+            positions: position_views,
+            summary: summary_view,
+            transactions: transaction_views,
+        }
+        .render()
+        .map_err(|error| AppError::Internal(error.into()))?,
+    ))
+}
+
+fn format_currency(amount: f64) -> String {
+    format!("${:.2}", amount)
+}
+
+fn format_currency_signed(amount: f64) -> String {
+    if amount >= 0.0 {
+        format!("+${:.2}", amount)
+    } else {
+        format!("-${:.2}", amount.abs())
+    }
+}
+
+fn format_shares(shares: f64) -> String {
+    if shares == shares.floor() {
+        format!("{:.0}", shares)
+    } else {
+        format!("{:.2}", shares)
+    }
+}

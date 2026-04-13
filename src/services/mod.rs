@@ -7,6 +7,7 @@ pub mod evaluator;
 pub mod opportunity_ranker;
 pub mod orchestrator;
 pub mod planner;
+pub mod portfolio;
 pub mod preliminary_thesis;
 pub mod reader;
 pub mod scanner;
