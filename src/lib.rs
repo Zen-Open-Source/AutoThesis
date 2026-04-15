@@ -7,6 +7,7 @@ pub mod models;
 pub mod providers;
 pub mod routes;
 pub mod services;
+pub mod utils;
 
 use anyhow::Result;
 use app_state::AppState;

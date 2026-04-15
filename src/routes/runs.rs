@@ -1,9 +1,10 @@
 use crate::{
     app_state::AppState,
     config::default_question_for_ticker,
-    error::{AppError, AppResult},
+    error::AppError,
     models::{CreateRunRequest, CreateRunResponse, FinalMemoResponse, IterationSummary},
     services::{batch, comparison, orchestrator},
+    utils::{normalize_ticker, render_question_for_ticker, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -234,30 +235,6 @@ async fn ensure_run_exists(state: &AppState, run_id: &str) -> AppResult<()> {
         return Err(AppError::NotFound);
     }
     Ok(())
-}
-
-fn normalize_ticker(raw: &str) -> AppResult<String> {
-    let cleaned = raw.trim().to_uppercase();
-    if cleaned.is_empty() {
-        return Err(AppError::BadRequest("ticker is required".to_string()));
-    }
-    if !cleaned
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
-    {
-        return Err(AppError::BadRequest(
-            "ticker must contain only letters, numbers, '.' or '-'".to_string(),
-        ));
-    }
-    Ok(cleaned)
-}
-
-fn render_question_for_ticker(question_template: &str, ticker: &str) -> String {
-    if question_template.contains("{ticker}") {
-        question_template.replace("{ticker}", ticker)
-    } else {
-        format!("{ticker}: {question_template}")
-    }
 }
 
 fn spawn_run(state: AppState, run_id: String) {

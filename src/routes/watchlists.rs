@@ -1,20 +1,20 @@
 use crate::{
     app_state::AppState,
     config::default_question_for_ticker,
-    error::{AppError, AppResult},
+    error::AppError,
     models::{
         AddWatchlistTickerRequest, CreateRunResponse, CreateWatchlistRequest,
         DashboardRefreshRequest, DashboardResponse, UpdateWatchlistRequest, Watchlist,
         WatchlistDetail,
     },
     services::{dashboard, orchestrator},
+    utils::{normalize_ticker, normalize_tickers, render_question_for_ticker, AppResult},
 };
 use axum::{
     extract::{Path, Query, State},
     response::Json as AxumJson,
 };
 use serde::Deserialize;
-use std::collections::HashSet;
 use tracing::error;
 
 #[derive(Debug, Deserialize)]
@@ -288,42 +288,6 @@ async fn ensure_watchlist_exists(state: &AppState, watchlist_id: &str) -> AppRes
         return Err(AppError::NotFound);
     }
     Ok(())
-}
-
-fn normalize_ticker(raw: &str) -> AppResult<String> {
-    let cleaned = raw.trim().to_uppercase();
-    if cleaned.is_empty() {
-        return Err(AppError::BadRequest("ticker is required".to_string()));
-    }
-    if !cleaned
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
-    {
-        return Err(AppError::BadRequest(
-            "ticker must contain only letters, numbers, '.' or '-'".to_string(),
-        ));
-    }
-    Ok(cleaned)
-}
-
-fn normalize_tickers(raw_tickers: Vec<String>) -> AppResult<Vec<String>> {
-    let mut seen = HashSet::new();
-    let mut tickers = Vec::new();
-    for raw_ticker in raw_tickers {
-        let ticker = normalize_ticker(&raw_ticker)?;
-        if seen.insert(ticker.clone()) {
-            tickers.push(ticker);
-        }
-    }
-    Ok(tickers)
-}
-
-fn render_question_for_ticker(question_template: &str, ticker: &str) -> String {
-    if question_template.contains("{ticker}") {
-        question_template.replace("{ticker}", ticker)
-    } else {
-        format!("{ticker}: {question_template}")
-    }
 }
 
 fn spawn_run(state: AppState, run_id: String) {

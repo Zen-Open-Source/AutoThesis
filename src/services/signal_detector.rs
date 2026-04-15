@@ -4,16 +4,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignalDetectorOutput {
-    pub signals: Vec<DetectedSignal>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DetectedSignal {
-    #[serde(rename = "type")]
-    pub signal_type: String,
-    pub strength: f64,
-    pub description: String,
-    pub evidence: Vec<String>,
+    pub signals: Vec<ScanSignal>,
 }
 
 /// Detect trading signals for a ticker by searching for recent news and analysis.
@@ -46,17 +37,7 @@ pub async fn detect_signals(state: &AppState, ticker: &str) -> Result<Vec<ScanSi
     {
         Ok(value) => {
             let output: SignalDetectorOutput = serde_json::from_value(value)?;
-            let signals = output
-                .signals
-                .into_iter()
-                .map(|s| ScanSignal {
-                    signal_type: s.signal_type,
-                    strength: s.strength,
-                    description: s.description,
-                    evidence: s.evidence,
-                })
-                .collect();
-            Ok(signals)
+            Ok(output.signals)
         }
         Err(_) => Ok(fallback_signals(ticker, &search_results)),
     }

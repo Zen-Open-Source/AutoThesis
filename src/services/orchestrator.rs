@@ -1,7 +1,7 @@
 use crate::{
     app_state::AppState,
     markdown::render_markdown,
-    models::{EvaluatorOutput, EvidenceNoteRecord, Run, SourceRecord},
+    models::EvaluatorOutput,
     services::{
         alerts, batch, comparison, critic, evaluator, planner, reader, search, synthesizer,
     },
@@ -346,6 +346,3 @@ async fn sync_thesis_alerts_for_run(state: &AppState, run_id: &str) -> Result<()
     }
     Ok(())
 }
-
-#[allow(dead_code)]
-fn _unused_to_keep_imports(_run: &Run, _sources: &[SourceRecord], _notes: &[EvidenceNoteRecord]) {}

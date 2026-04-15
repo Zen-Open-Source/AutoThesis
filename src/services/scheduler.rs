@@ -139,7 +139,6 @@ async fn process_watchlist_refresh(
             continue;
         }
 
-        // Spawn the run
         match spawn_scheduled_run(
             state,
             active_runs,
@@ -169,7 +168,6 @@ async fn process_watchlist_refresh(
         }
     }
 
-    // If any runs were spawned, update the watchlist's refresh timestamp
     if runs_spawned > 0 {
         state
             .db
@@ -188,7 +186,6 @@ async fn spawn_scheduled_run(
     ticker: &str,
     schedule: &crate::models::WatchlistSchedule,
 ) -> Result<ScheduledRun> {
-    // Determine the question to use
     let question = if let Some(template_id) = &schedule.refresh_template_id {
         if let Some(template) = state.db.get_run_template(template_id).await? {
             if template.question_template.contains("{ticker}") {
@@ -203,28 +200,23 @@ async fn spawn_scheduled_run(
         default_question_for_ticker(ticker)
     };
 
-    // Create the run
     let run = state.db.create_run(ticker, &question).await?;
 
-    // Create the scheduled run record
     let scheduled_run = state
         .db
         .create_scheduled_run(watchlist_id, ticker, &run.id)
         .await?;
 
-    // Mark as started
     state
         .db
         .update_scheduled_run_started(&scheduled_run.id)
         .await?;
 
-    // Track the active run
     {
         let mut guard = active_runs.lock().await;
         guard.insert(ticker.to_string());
     }
 
-    // Spawn the orchestrator
     let state_clone = state.clone();
     let run_id = run.id.clone();
     let scheduled_run_id = scheduled_run.id.clone();
@@ -234,13 +226,11 @@ async fn spawn_scheduled_run(
     tokio::spawn(async move {
         let result = orchestrator::execute_run(state_clone.clone(), run_id.clone()).await;
 
-        // Remove from active tracking
         {
             let mut guard = active_runs_clone.lock().await;
             guard.remove(&ticker_clone);
         }
 
-        // Update scheduled run status
         let success = result.is_ok();
         if let Err(error) = &result {
             error!(%run_id, error = %error, "scheduled run failed");

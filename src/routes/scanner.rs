@@ -1,11 +1,12 @@
 use crate::{
     app_state::AppState,
-    error::{AppError, AppResult},
+    error::AppError,
     models::{
         CreateScanRunRequest, CreateScanRunResponse, PromoteOpportunityRequest,
         PromoteOpportunityResponse, ScanOpportunityDetail, ScanRunDetail,
     },
     services::scanner,
+    utils::{normalize_ticker, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -210,20 +211,4 @@ pub async fn add_ticker_to_universe(
 pub struct AddTickerRequest {
     pub ticker: String,
     pub name: Option<String>,
-}
-
-fn normalize_ticker(raw: &str) -> AppResult<String> {
-    let cleaned = raw.trim().to_uppercase();
-    if cleaned.is_empty() {
-        return Err(AppError::BadRequest("ticker is required".to_string()));
-    }
-    if !cleaned
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
-    {
-        return Err(AppError::BadRequest(
-            "ticker must contain only letters, numbers, '.' or '-'".to_string(),
-        ));
-    }
-    Ok(cleaned)
 }

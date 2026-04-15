@@ -1,11 +1,10 @@
 use crate::providers::llm::LlmProvider;
+use crate::utils::retry_with_backoff;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
-use tokio::time::sleep;
 
 #[derive(Clone)]
 pub struct ClaudeProvider {
@@ -26,7 +25,7 @@ impl ClaudeProvider {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .context("failed to build reqwest client")?;
 
@@ -59,41 +58,35 @@ impl ClaudeProvider {
         };
 
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let client = self.client.clone();
 
-        let mut last_error = None;
-        for attempt in 0..3 {
-            let response = self.client.post(&url).json(&request).send().await;
-            match response {
-                Ok(response) => match response.error_for_status() {
-                    Ok(success) => {
-                        let body: ClaudeResponse = success.json().await?;
-                        let content = body
-                            .content
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| anyhow!("Claude returned no content"))?
-                            .text;
-                        if json_mode {
-                            // Try to extract JSON from the response
-                            let json_start = content.find('{');
-                            let json_end = content.rfind('}');
-                            if let (Some(start), Some(end)) = (json_start, json_end) {
-                                return Ok(content[start..=end].to_string());
-                            }
-                        }
-                        return Ok(content);
-                    }
-                    Err(error) => last_error = Some(anyhow!(error)),
-                },
-                Err(error) => last_error = Some(anyhow!(error)),
+        retry_with_backoff(
+            || async {
+                let response = client.post(&url).json(&request).send().await?;
+                let response = response.error_for_status()?;
+                let body: ClaudeResponse = response.json().await?;
+                let content = body
+                    .content
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("Claude returned no content"))?
+                    .text;
+                Ok(content)
+            },
+            3,
+        )
+        .await
+        .map(|content| {
+            if json_mode {
+                // Try to extract JSON from the response
+                let json_start = content.find('{');
+                let json_end = content.rfind('}');
+                if let (Some(start), Some(end)) = (json_start, json_end) {
+                    return content[start..=end].to_string();
+                }
             }
-
-            if attempt < 2 {
-                sleep(Duration::from_millis(500 * (attempt + 1) as u64)).await;
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| anyhow!("Claude request failed")))
+            content
+        })
     }
 }
 

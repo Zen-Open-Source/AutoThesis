@@ -1,11 +1,10 @@
 use crate::providers::llm::LlmProvider;
+use crate::utils::retry_with_backoff;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
-use tokio::time::sleep;
 
 #[derive(Clone)]
 pub struct GeminiProvider {
@@ -22,7 +21,7 @@ impl GeminiProvider {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .context("failed to build reqwest client")?;
 
@@ -71,38 +70,29 @@ impl GeminiProvider {
             self.model,
             self.api_key
         );
+        let client = self.client.clone();
 
-        let mut last_error = None;
-        for attempt in 0..3 {
-            let response = self.client.post(&url).json(&request).send().await;
-            match response {
-                Ok(response) => match response.error_for_status() {
-                    Ok(success) => {
-                        let body: GeminiResponse = success.json().await?;
-                        let text = body
-                            .candidates
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| anyhow!("Gemini returned no candidates"))?
-                            .content
-                            .parts
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| anyhow!("Gemini returned no parts"))?
-                            .text;
-                        return Ok(text);
-                    }
-                    Err(error) => last_error = Some(anyhow!(error)),
-                },
-                Err(error) => last_error = Some(anyhow!(error)),
-            }
-
-            if attempt < 2 {
-                sleep(Duration::from_millis(500 * (attempt + 1) as u64)).await;
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| anyhow!("Gemini request failed")))
+        retry_with_backoff(
+            || async {
+                let response = client.post(&url).json(&request).send().await?;
+                let response = response.error_for_status()?;
+                let body: GeminiResponse = response.json().await?;
+                let text = body
+                    .candidates
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("Gemini returned no candidates"))?
+                    .content
+                    .parts
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow!("Gemini returned no parts"))?
+                    .text;
+                Ok(text)
+            },
+            3,
+        )
+        .await
     }
 }
 

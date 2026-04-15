@@ -1,8 +1,9 @@
 use crate::{
     app_state::AppState,
-    error::{AppError, AppResult},
+    error::AppError,
     models::{Comparison, ComparisonDetail, CreateComparisonRequest, CreateComparisonResponse},
     services::orchestrator,
+    utils::{normalize_ticker, render_question_for_ticker, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -109,14 +110,6 @@ pub async fn create_comparison(
     }))
 }
 
-fn render_question_for_ticker(question_template: &str, ticker: &str) -> String {
-    if question_template.contains("{ticker}") {
-        question_template.replace("{ticker}", ticker)
-    } else {
-        format!("{ticker}: {question_template}")
-    }
-}
-
 pub async fn list_comparisons(
     State(state): State<AppState>,
 ) -> AppResult<AxumJson<Vec<Comparison>>> {
@@ -161,20 +154,4 @@ pub async fn delete_comparison(
         .await
         .map_err(AppError::from)?;
     Ok(AxumJson(serde_json::json!({ "deleted": true })))
-}
-
-fn normalize_ticker(raw: &str) -> AppResult<String> {
-    let cleaned = raw.trim().to_uppercase();
-    if cleaned.is_empty() {
-        return Err(AppError::BadRequest("ticker is required".to_string()));
-    }
-    if !cleaned
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    {
-        return Err(AppError::BadRequest(
-            "ticker must contain only letters, numbers, '.' or '-'".to_string(),
-        ));
-    }
-    Ok(cleaned)
 }

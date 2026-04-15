@@ -27,10 +27,8 @@ pub async fn execute_scan(state: AppState, scan_run_id: String) -> Result<()> {
 async fn execute_scan_inner(state: &AppState, scan_run_id: &str) -> Result<()> {
     info!(%scan_run_id, "starting scan run");
 
-    // Update status to running
     state.db.set_scan_run_status(scan_run_id, "running").await?;
 
-    // Get scan configuration
     let scan_run = state.db.get_scan_run(scan_run_id).await?;
     let config = if let Some(run) = &scan_run {
         if let Some(config_id) = &run.config_id {
@@ -42,30 +40,24 @@ async fn execute_scan_inner(state: &AppState, scan_run_id: &str) -> Result<()> {
         None
     };
 
-    // Build ticker list to scan
     let tickers = build_ticker_list(state, config.as_ref()).await?;
     info!(%scan_run_id, ticker_count = tickers.len(), "ticker list built");
 
     let mut opportunities = Vec::new();
     let mut tickers_scanned = 0i64;
 
-    // Process each ticker
     for ticker_info in &tickers {
         match process_ticker(state, scan_run_id, ticker_info).await {
             Ok(Some(opportunity)) => {
                 opportunities.push(opportunity);
             }
-            Ok(None) => {
-                // Ticker didn't meet criteria
-            }
+            Ok(None) => {}
             Err(error) => {
-                // Log error but continue scanning
                 info!(ticker = %ticker_info.ticker, error = %error, "ticker scan failed");
             }
         }
         tickers_scanned += 1;
 
-        // Update progress periodically
         if tickers_scanned % 10 == 0 {
             let _ = state
                 .db
@@ -74,19 +66,16 @@ async fn execute_scan_inner(state: &AppState, scan_run_id: &str) -> Result<()> {
         }
     }
 
-    // Filter to top opportunities
     let max_opportunities = config
         .as_ref()
         .map(|c| c.max_opportunities as usize)
         .unwrap_or(20);
     opportunities = opportunity_ranker::filter_top_opportunities(opportunities, max_opportunities);
 
-    // Persist opportunities
     for opportunity in &opportunities {
         let _ = persist_opportunity(state, scan_run_id, opportunity).await;
     }
 
-    // Final update
     state
         .db
         .update_scan_run_progress(scan_run_id, tickers_scanned, opportunities.len() as i64)
@@ -123,24 +112,18 @@ async fn process_ticker(
 ) -> Result<Option<ScanOpportunity>> {
     let ticker = &ticker_info.ticker;
 
-    // Detect signals
     let signals = signal_detector::detect_signals(state, ticker).await?;
 
-    // Calculate signal strength
     let signal_strength = signal_detector::calculate_signal_strength(&signals);
 
-    // Calculate coverage gap
     let coverage_gap = opportunity_ranker::calculate_coverage_gap_score(state, ticker).await?;
 
-    // Check minimum criteria
     if !opportunity_ranker::meets_minimum_criteria(signal_strength, coverage_gap, 3.0, 5.0) {
         return Ok(None);
     }
 
-    // Calculate timing score
     let timing = signal_detector::calculate_timing_score(&signals);
 
-    // Generate preliminary thesis
     let PreliminaryThesisOutput {
         thesis_markdown,
         key_catalysts,
@@ -150,7 +133,6 @@ async fn process_ticker(
 
     let thesis_html = preliminary_thesis::render_thesis_html(&thesis_markdown);
 
-    // Calculate overall score
     let overall_score = opportunity_ranker::calculate_overall_score(
         signal_strength,
         Some(quality_score),
@@ -158,7 +140,6 @@ async fn process_ticker(
         timing,
     );
 
-    // Create opportunity
     let opportunity = ScanOpportunity {
         id: uuid::Uuid::new_v4().to_string(),
         scan_run_id: scan_run_id.to_string(),
