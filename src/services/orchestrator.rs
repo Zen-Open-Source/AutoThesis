@@ -5,6 +5,7 @@ use crate::{
     services::{
         alerts, batch, comparison, critic, evaluator, planner, reader, search, synthesizer,
     },
+    status::RunStatus,
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
@@ -16,11 +17,16 @@ use url::Url;
 struct RunCancelled;
 
 pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
+    state.cancellation.register(&run_id);
     let result = execute_run_inner(state.clone(), &run_id).await;
+    state.cancellation.clear(&run_id);
     if let Err(error) = result {
         if error.downcast_ref::<RunCancelled>().is_some() {
             info!(%run_id, "run cancelled before completion");
-            let _ = state.db.set_run_status(&run_id, "cancelled").await;
+            let _ = state
+                .db
+                .set_run_status(&run_id, RunStatus::Cancelled.as_str())
+                .await;
             let _ = sync_thesis_alerts_for_run(&state, &run_id).await;
             let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
             let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
@@ -28,7 +34,10 @@ pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
         }
 
         error!(%run_id, error = %error, "run failed");
-        let _ = state.db.set_run_status(&run_id, "failed").await;
+        let _ = state
+            .db
+            .set_run_status(&run_id, RunStatus::Failed.as_str())
+            .await;
         let _ = state
             .db
             .insert_event(
@@ -59,7 +68,10 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
     ensure_run_not_cancelled(&state, run_id).await?;
 
     info!(%run_id, ticker = %run.ticker, "starting run");
-    state.db.set_run_status(run_id, "running").await?;
+    state
+        .db
+        .set_run_status(run_id, RunStatus::Running.as_str())
+        .await?;
     let _ = comparison::sync_comparisons_for_run(&state, run_id).await;
     let _ = batch::sync_batch_jobs_for_run(&state, run_id).await;
     state
@@ -329,12 +341,20 @@ fn summarize_memo(markdown: &str) -> Option<String> {
 }
 
 async fn ensure_run_not_cancelled(state: &AppState, run_id: &str) -> Result<()> {
+    // Fast path: in-process cancellation flag (set synchronously by the
+    // cancel route), avoids a DB round-trip on every iteration step.
+    if state.cancellation.is_cancelled(run_id) {
+        return Err(RunCancelled.into());
+    }
+    // Fallback: if the flag was never registered (e.g. a run was requeued
+    // by an external mechanism) or is unknown, fall back to the DB status
+    // so cancellation still eventually kicks in.
     let run = state
         .db
         .get_run(run_id)
         .await?
         .ok_or_else(|| anyhow!("run not found while checking status: {run_id}"))?;
-    if run.status == "cancelled" {
+    if RunStatus::parse(&run.status) == Some(RunStatus::Cancelled) {
         return Err(RunCancelled.into());
     }
     Ok(())

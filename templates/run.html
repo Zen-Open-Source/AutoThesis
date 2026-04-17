@@ -73,6 +73,52 @@
   {% endif %}
 </section>
 
+{% if related_tickers.is_some() %}
+<section class="panel" id="related-tickers-panel">
+  <h2>Related Tickers</h2>
+  <div id="related-tickers-list" class="iteration-list">
+    {% for ticker in related_tickers.as_ref().unwrap().related_tickers %}
+      <div class="related-ticker-card">
+        <div class="ticker-header">
+          <strong>{{ ticker.ticker }}</strong>
+          {% if ticker.name.is_some() %}
+            <span class="ticker-name">{{ ticker.name.as_ref().unwrap() }}</span>
+          {% endif %}
+          <span class="badge badge-{{ ticker.relationship_type }}">{{ ticker.relationship_type }}</span>
+        </div>
+        {% if ticker.context.is_some() %}
+          <p class="ticker-context">{{ ticker.context.as_ref().unwrap() }}</p>
+        {% endif %}
+        <div class="ticker-stats">
+          {% if ticker.has_research %}
+            <span class="stat">
+              {% if ticker.latest_conviction.is_some() %}
+                Conviction: {{ ticker.latest_conviction.unwrap() }}
+              {% else %}
+                Research exists
+              {% endif %}
+            </span>
+          {% endif %}
+          <span class="stat">Relevance: {{ ticker.relevance_score }}</span>
+        </div>
+        <div class="ticker-actions">
+          {% if ticker.has_research %}
+            {% if ticker.latest_run_id.is_some() %}
+              <a href="/runs/{{ ticker.latest_run_id.as_ref().unwrap() }}" class="secondary-button compact-button">View Research</a>
+            {% endif %}
+          {% else %}
+            <button type="button" class="compact-button start-research-button" data-ticker="{{ ticker.ticker }}">Start Research</button>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  {% if related_tickers.as_ref().unwrap().related_tickers.is_empty() %}
+    <p id="related-tickers-placeholder">No related tickers found.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 <script>
   const runId = '{{ run.id }}';
   const eventList = document.getElementById('event-list');
@@ -139,6 +185,31 @@
       window.location.reload();
     });
   }
+
+  // Handle "Start Research" buttons for related tickers
+  document.querySelectorAll('.start-research-button').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const ticker = button.dataset.ticker;
+      button.disabled = true;
+      button.textContent = 'Starting...';
+      
+      const response = await fetch('/api/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, question: null, template_id: null })
+      });
+      
+      if (!response.ok) {
+        showBookmarkMessage('Failed to start research for ' + ticker, true);
+        button.disabled = false;
+        button.textContent = 'Start Research';
+        return;
+      }
+      
+      const data = await response.json();
+      window.location.href = `/runs/${data.run_id}`;
+    });
+  });
 
   function renderEvents(events) {
     eventList.innerHTML = events.map((event) => `

@@ -3,8 +3,9 @@ use crate::{
     config::default_question_for_ticker,
     error::AppError,
     models::{CreateRunRequest, CreateRunResponse, FinalMemoResponse, IterationSummary},
-    services::{batch, comparison, orchestrator},
-    utils::{normalize_ticker, render_question_for_ticker, AppResult},
+    services::{batch, comparison, orchestrator, related_tickers},
+    status::RunStatus,
+    utils::{normalize_ticker, render_question_for_ticker, sanitize_question, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -23,7 +24,7 @@ pub async fn create_run(
         .map(str::trim)
         .filter(|question| !question.is_empty())
     {
-        question.to_string()
+        sanitize_question(question)
     } else if let Some(template_id) = payload
         .template_id
         .as_deref()
@@ -71,16 +72,23 @@ pub async fn cancel_run(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound)?;
 
-    if run.status == "completed" || run.status == "failed" {
+    let parsed_status = RunStatus::parse(&run.status);
+    if matches!(
+        parsed_status,
+        Some(RunStatus::Completed | RunStatus::Failed)
+    ) {
         return Err(AppError::BadRequest(
             "completed or failed runs cannot be cancelled".to_string(),
         ));
     }
 
-    if run.status != "cancelled" {
+    if parsed_status != Some(RunStatus::Cancelled) {
+        // Flip the in-process cancellation flag so the orchestrator notices
+        // at its next checkpoint without waiting on a DB poll.
+        state.cancellation.cancel(&run_id);
         state
             .db
-            .set_run_status(&run_id, "cancelled")
+            .set_run_status(&run_id, RunStatus::Cancelled.as_str())
             .await
             .map_err(AppError::from)?;
         state
@@ -116,7 +124,10 @@ pub async fn retry_run(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound)?;
 
-    if run.status != "failed" && run.status != "cancelled" {
+    if !matches!(
+        RunStatus::parse(&run.status),
+        Some(RunStatus::Failed | RunStatus::Cancelled)
+    ) {
         return Err(AppError::BadRequest(
             "only failed or cancelled runs can be retried".to_string(),
         ));
@@ -243,4 +254,15 @@ fn spawn_run(state: AppState, run_id: String) {
             error!(%run_id, error = %error, "background orchestrator failed");
         }
     });
+}
+
+pub async fn get_related_tickers(
+    Path(run_id): Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<Json<crate::models::RelatedTickersResponse>> {
+    ensure_run_exists(&state, &run_id).await?;
+    let response = related_tickers::discover_related_tickers(&state, &run_id)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(response))
 }

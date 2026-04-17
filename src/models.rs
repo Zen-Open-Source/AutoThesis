@@ -1144,3 +1144,26 @@ pub struct PortfolioDetail {
     pub summary: PortfolioSummary,
     pub recent_transactions: Vec<Transaction>,
 }
+
+// Related Tickers Discovery models
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedTicker {
+    pub ticker: String,
+    pub name: Option<String>,
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+    pub relationship_type: String,
+    pub relevance_score: f64,
+    pub context: Option<String>,
+    pub has_research: bool,
+    pub latest_conviction: Option<f64>,
+    pub latest_run_id: Option<String>,
+    pub latest_run_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedTickersResponse {
+    pub primary_ticker: String,
+    pub related_tickers: Vec<RelatedTicker>,
+}

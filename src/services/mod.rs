@@ -10,6 +10,7 @@ pub mod planner;
 pub mod portfolio;
 pub mod preliminary_thesis;
 pub mod reader;
+pub mod related_tickers;
 pub mod scanner;
 pub mod scheduler;
 pub mod search;

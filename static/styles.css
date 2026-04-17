@@ -386,3 +386,68 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Related Tickers styles */
+.related-ticker-card {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  background: var(--card-alt);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.related-ticker-card .ticker-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.related-ticker-card .ticker-name {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.related-ticker-card .ticker-context {
+  color: var(--text-soft);
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+
+.related-ticker-card .ticker-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  margin-bottom: 0.75rem;
+}
+
+.related-ticker-card .ticker-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.badge-samesector { background: #dbeafe; color: #1d4ed8; }
+.badge-mentionedinsources { background: #fef3c7; color: #92400e; }
+.badge-mentionedinthesis { background: #f0fdf4; color: #166534; }
+.badge-same_sector { background: #dbeafe; color: #1d4ed8; }
+.badge-mentioned_in_sources { background: #fef3c7; color: #92400e; }
+.badge-mentioned_in_thesis { background: #f0fdf4; color: #166534; }
+
+[data-theme="dark"] .badge-samesector { background: #1e3a5f; color: #60a5fa; }
+[data-theme="dark"] .badge-mentionedinsources { background: #422006; color: #fbbf24; }
+[data-theme="dark"] .badge-mentionedinthesis { background: #14532d; color: #22c55e; }
+[data-theme="dark"] .badge-same_sector { background: #1e3a5f; color: #60a5fa; }
+[data-theme="dark"] .badge-mentioned_in_sources { background: #422006; color: #fbbf24; }
+[data-theme="dark"] .badge-mentioned_in_thesis { background: #14532d; color: #22c55e; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .badge-samesector { background: #1e3a5f; color: #60a5fa; }
+  :root:not([data-theme]) .badge-mentionedinsources { background: #422006; color: #fbbf24; }
+  :root:not([data-theme]) .badge-mentionedinthesis { background: #14532d; color: #22c55e; }
+  :root:not([data-theme]) .badge-same_sector { background: #1e3a5f; color: #60a5fa; }
+  :root:not([data-theme]) .badge-mentioned_in_sources { background: #422006; color: #fbbf24; }
+  :root:not([data-theme]) .badge-mentioned_in_thesis { background: #14532d; color: #22c55e; }
+}

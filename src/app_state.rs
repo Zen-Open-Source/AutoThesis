@@ -1,4 +1,5 @@
 use crate::{
+    cancellation::CancellationRegistry,
     config::Config,
     db::Database,
     providers::{
@@ -61,6 +62,7 @@ pub struct AppState {
     pub fetcher: Arc<dyn WebFetcher>,
     pub prompts: PromptStore,
     pub price_provider: PriceProvider,
+    pub cancellation: CancellationRegistry,
 }
 
 impl AppState {
@@ -81,6 +83,7 @@ impl AppState {
             fetcher,
             prompts,
             price_provider,
+            cancellation: CancellationRegistry::new(),
         }
     }
 

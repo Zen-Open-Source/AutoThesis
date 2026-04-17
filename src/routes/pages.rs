@@ -3,10 +3,11 @@ use crate::{
     error::{AppError, AppResult},
     markdown::render_markdown,
     models::{
-        BatchJob, Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary, Run,
-        RunTemplate, SearchQueryRecord, SourceRecord, Watchlist,
+        BatchJob, Bookmark, EvaluatorOutput, EventRecord, Iteration, IterationSummary,
+        RelatedTickersResponse, Run, RunTemplate, SearchQueryRecord, SourceRecord, Watchlist,
     },
-    services::dashboard,
+    services::{dashboard, related_tickers},
+    status::RunStatus,
 };
 use askama::Template;
 use axum::{
@@ -31,6 +32,7 @@ struct RunDetailTemplate {
     final_memo_html: Option<String>,
     can_cancel: bool,
     can_retry: bool,
+    related_tickers: Option<RelatedTickersResponse>,
 }
 
 #[derive(Clone)]
@@ -189,8 +191,7 @@ pub async fn dashboard_index(
             has_summary: row
                 .summary
                 .as_ref()
-                .map(|summary| !summary.is_empty())
-                .unwrap_or(false),
+                .is_some_and(|summary| !summary.is_empty()),
             summary: row.summary.unwrap_or_default(),
             has_latest_run: row.latest_run_id.is_some(),
             latest_run_id: row.latest_run_id.unwrap_or_default(),
@@ -287,13 +288,25 @@ pub async fn run_detail(
         .iter()
         .map(IterationSummary::from_iteration)
         .collect();
+
+    // Discover related tickers (only for completed runs)
+    let run_status = RunStatus::parse(&run.status);
+    let related_tickers = if run_status == Some(RunStatus::Completed) {
+        related_tickers::discover_related_tickers(&state, &run_id)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
     let html = RunDetailTemplate {
         final_memo_html: run.final_memo_html.clone(),
-        can_cancel: run.status == "queued" || run.status == "running",
-        can_retry: run.status == "failed" || run.status == "cancelled",
+        can_cancel: run_status.is_some_and(RunStatus::is_in_flight),
+        can_retry: matches!(run_status, Some(RunStatus::Failed | RunStatus::Cancelled)),
         run,
         events,
         iterations,
+        related_tickers,
     }
     .render()
     .map_err(|error| AppError::Internal(error.into()))?;
@@ -607,9 +620,9 @@ pub async fn comparison_detail(
             }
         })
         .collect();
-    let has_pending_runs = run_views.iter().any(|run| {
-        run.status != "completed" && run.status != "failed" && run.status != "cancelled"
-    });
+    let has_pending_runs = run_views
+        .iter()
+        .any(|run| RunStatus::parse(&run.status).map_or(true, |s| !s.is_terminal()));
 
     let html = ComparisonTemplate {
         comparison,
@@ -922,6 +935,7 @@ struct PortfolioDetailTemplate {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // fields referenced by askama templates
 struct PositionView {
     id: String,
     ticker: String,
@@ -955,6 +969,7 @@ struct PortfolioSummaryView {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // fields referenced by askama templates
 struct TransactionView {
     id: String,
     ticker: String,
@@ -974,23 +989,28 @@ pub async fn portfolios_index(State(state): State<AppState>) -> AppResult<Html<S
         .await
         .map_err(AppError::from)?;
 
-    let mut portfolio_views = Vec::new();
-    for portfolio in portfolios {
-        let positions = state
-            .db
-            .list_active_positions(&portfolio.id)
-            .await
-            .map_err(AppError::from)?;
-        portfolio_views.push(PortfolioView {
-            id: portfolio.id,
-            name: portfolio.name,
-            has_description: portfolio.description.is_some(),
-            description: portfolio.description.unwrap_or_default(),
-            position_count: positions.len() as i32,
-            cash_balance_text: format_currency(portfolio.cash_balance),
-            updated_at_text: format_timestamp(portfolio.updated_at),
-        });
-    }
+    let position_counts = state
+        .db
+        .count_active_positions_by_portfolio()
+        .await
+        .map_err(AppError::from)?;
+
+    let portfolio_views = portfolios
+        .into_iter()
+        .map(|portfolio| {
+            let position_count =
+                i32::try_from(*position_counts.get(&portfolio.id).unwrap_or(&0)).unwrap_or(0);
+            PortfolioView {
+                id: portfolio.id,
+                name: portfolio.name,
+                has_description: portfolio.description.is_some(),
+                description: portfolio.description.unwrap_or_default(),
+                position_count,
+                cash_balance_text: format_currency(portfolio.cash_balance),
+                updated_at_text: format_timestamp(portfolio.updated_at),
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(Html(
         PortfoliosTemplate {
@@ -1046,7 +1066,7 @@ pub async fn portfolio_detail(
                     .unwrap_or_else(|| "-".to_string()),
                 gain_loss_text: p
                     .gain_loss
-                    .map(|g| format_currency_signed(g))
+                    .map(format_currency_signed)
                     .unwrap_or_else(|| "-".to_string()),
                 gain_loss_pct_text: p
                     .gain_loss_pct

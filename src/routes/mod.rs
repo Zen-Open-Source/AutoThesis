@@ -53,6 +53,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/runs/:id/final", get(runs::get_final))
         .route(
+            "/api/runs/:id/related-tickers",
+            get(runs::get_related_tickers),
+        )
+        .route(
             "/api/batches",
             post(batches::create_batch_job).get(batches::list_batch_jobs),
         )
