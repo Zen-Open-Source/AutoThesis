@@ -10,13 +10,31 @@ use crate::models::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
-use std::{fs, path::PathBuf};
+use r2d2::{CustomizeConnection, Pool};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, Connection, Error as RusqliteError, OptionalExtension, Row};
+use std::{fs, path::PathBuf, sync::Arc};
 use uuid::Uuid;
+
+pub(crate) type SqlitePool = Pool<SqliteConnectionManager>;
+pub(crate) type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
 #[derive(Clone)]
 pub struct Database {
-    database_url: String,
+    pool: Arc<SqlitePool>,
+}
+
+#[derive(Debug)]
+struct SqlitePragmaSetup;
+
+impl CustomizeConnection<Connection, RusqliteError> for SqlitePragmaSetup {
+    fn on_acquire(&self, conn: &mut Connection) -> Result<(), RusqliteError> {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(())
+    }
 }
 
 const ALERT_RULE_SCORE_DROP: &str = "score_drop";
@@ -25,8 +43,27 @@ const ALERT_RULE_DECISION_DOWNGRADE: &str = "decision_downgrade";
 
 impl Database {
     pub async fn connect(database_url: &str) -> Result<Self> {
+        let path = normalize_database_url(database_url);
+        let manager = if path == ":memory:" {
+            SqliteConnectionManager::memory()
+        } else {
+            SqliteConnectionManager::file(&path)
+        };
+        let manager = manager.with_init(|_| Ok(()));
+
+        // For in-memory databases every new connection is a distinct DB, so we
+        // must cap the pool at 1 to preserve schema + data across calls.
+        let is_memory = path == ":memory:";
+        let max_size = if is_memory { 1 } else { 8 };
+
+        let pool = Pool::builder()
+            .max_size(max_size)
+            .connection_customizer(Box::new(SqlitePragmaSetup))
+            .build(manager)
+            .context("failed to build sqlite connection pool")?;
+
         let database = Self {
-            database_url: database_url.to_string(),
+            pool: Arc::new(pool),
         };
         database.run_migrations()?;
         Ok(database)
@@ -408,6 +445,15 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub async fn list_sources_for_run(&self, run_id: &str) -> Result<Vec<SourceRecord>> {
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT * FROM sources WHERE run_id = ?1 ORDER BY quality_score DESC, created_at ASC",
+        )?;
+        let rows = statement.query_map([run_id], map_source)?;
+        collect_rows(rows)
+    }
+
     pub async fn insert_evidence_note(
         &self,
         iteration_id: &str,
@@ -644,17 +690,10 @@ impl Database {
         Ok(())
     }
 
-    fn open_connection(&self) -> Result<Connection> {
-        let path = normalize_database_url(&self.database_url);
-        let conn = if path == ":memory:" {
-            Connection::open_in_memory()?
-        } else {
-            Connection::open(path)?
-        };
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        Ok(conn)
+    fn open_connection(&self) -> Result<PooledConn> {
+        self.pool
+            .get()
+            .context("failed to acquire sqlite connection from pool")
     }
 
     fn run_migrations(&self) -> Result<()> {
@@ -1726,6 +1765,71 @@ impl Database {
         self.get_ticker_universe(ticker)
             .await?
             .context("ticker universe entry missing after upsert")
+    }
+
+    /// Batch lookup of `TickerUniverse` rows keyed by ticker. Avoids an N+1
+    /// sequence of `get_ticker_universe` calls when enriching many candidates
+    /// at once (e.g. related-tickers discovery).
+    pub async fn get_ticker_universe_batch(
+        &self,
+        tickers: &[String],
+    ) -> Result<std::collections::HashMap<String, TickerUniverse>> {
+        use std::collections::HashMap;
+        if tickers.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.open_connection()?;
+        let placeholders: String = (0..tickers.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT * FROM ticker_universe WHERE ticker IN ({placeholders})");
+        let params: Vec<&dyn rusqlite::ToSql> =
+            tickers.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), map_ticker_universe)?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let entry = row?;
+            map.insert(entry.ticker.clone(), entry);
+        }
+        Ok(map)
+    }
+
+    /// Batch lookup: for each ticker, fetch its latest run (if any). Single
+    /// SQL query using a grouped sub-select.
+    pub async fn latest_runs_for_tickers(
+        &self,
+        tickers: &[String],
+    ) -> Result<std::collections::HashMap<String, Run>> {
+        use std::collections::HashMap;
+        if tickers.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.open_connection()?;
+        let placeholders: String = (0..tickers.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT r.* FROM runs r
+             INNER JOIN (
+                SELECT ticker, MAX(created_at) AS max_created_at
+                FROM runs
+                WHERE ticker IN ({placeholders})
+                GROUP BY ticker
+             ) latest ON latest.ticker = r.ticker AND latest.max_created_at = r.created_at"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            tickers.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), map_run)?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let run = row?;
+            map.insert(run.ticker.clone(), run);
+        }
+        Ok(map)
     }
 
     pub async fn get_ticker_universe(&self, ticker: &str) -> Result<Option<TickerUniverse>> {
@@ -3478,6 +3582,28 @@ impl Database {
         collect_rows(rows)
     }
 
+    /// Batch-count active positions per portfolio in a single query.
+    /// Used by the portfolios index page to avoid N `list_active_positions`
+    /// round-trips.
+    pub async fn count_active_positions_by_portfolio(
+        &self,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        use std::collections::HashMap;
+        let conn = self.open_connection()?;
+        let mut statement = conn.prepare(
+            "SELECT portfolio_id, COUNT(*) FROM positions WHERE is_active = 1 GROUP BY portfolio_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (portfolio_id, count) = row?;
+            map.insert(portfolio_id, count);
+        }
+        Ok(map)
+    }
+
     pub async fn list_active_positions(&self, portfolio_id: &str) -> Result<Vec<Position>> {
         let conn = self.open_connection()?;
         let mut statement = conn.prepare(
@@ -3587,6 +3713,7 @@ impl Database {
         Ok(rows > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_transaction(
         &self,
         portfolio_id: &str,
