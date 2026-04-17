@@ -2,6 +2,7 @@ use crate::{
     app_state::AppState,
     error::{AppError, AppResult},
     models::{CreateRunTemplateRequest, RunTemplate, UpdateRunTemplateRequest},
+    utils::sanitize_question,
 };
 use axum::{
     extract::{Path, State},
@@ -42,9 +43,10 @@ pub async fn create_run_template(
         ));
     }
 
+    let sanitized_question = sanitize_question(question_template);
     let template = state
         .db
-        .create_run_template(name, question_template, description)
+        .create_run_template(name, &sanitized_question, description)
         .await
         .map_err(AppError::from)?;
     Ok(AxumJson(template))
@@ -74,9 +76,10 @@ pub async fn update_run_template(
         ));
     }
 
+    let sanitized_question = sanitize_question(question_template);
     let updated = state
         .db
-        .update_run_template(&template_id, name, question_template, description)
+        .update_run_template(&template_id, name, &sanitized_question, description)
         .await
         .map_err(AppError::from)?;
     if !updated {

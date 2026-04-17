@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use tracing::error;
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -25,14 +26,20 @@ struct ErrorResponse {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status = match self {
-            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::NotFound => StatusCode::NOT_FOUND,
-            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        let (status, public_message) = match &self {
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            Self::NotFound => (StatusCode::NOT_FOUND, "resource not found".to_string()),
+            Self::Internal(err) => {
+                error!(error = %err, "internal server error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
         };
 
         let body = Json(ErrorResponse {
-            error: self.to_string(),
+            error: public_message,
         });
 
         (status, body).into_response()

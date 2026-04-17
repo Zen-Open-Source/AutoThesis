@@ -4,7 +4,7 @@ use crate::{
     error::AppError,
     models::{BatchJob, BatchJobDetail, CreateBatchJobRequest, CreateBatchJobResponse},
     services::orchestrator,
-    utils::{normalize_ticker, render_question_for_ticker, AppResult},
+    utils::{normalize_ticker, render_question_for_ticker, sanitize_question, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -121,7 +121,7 @@ async fn resolve_question_template(
         .map(str::trim)
         .filter(|question_template| !question_template.is_empty())
     {
-        return Ok(question_template.to_string());
+        return Ok(sanitize_question(question_template));
     }
 
     if let Some(template_id) = payload

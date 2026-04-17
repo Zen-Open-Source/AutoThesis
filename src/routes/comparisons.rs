@@ -3,7 +3,7 @@ use crate::{
     error::AppError,
     models::{Comparison, ComparisonDetail, CreateComparisonRequest, CreateComparisonResponse},
     services::orchestrator,
-    utils::{normalize_ticker, render_question_for_ticker, AppResult},
+    utils::{normalize_ticker, render_question_for_ticker, sanitize_question, AppResult},
 };
 use axum::{
     extract::{Path, State},
@@ -47,7 +47,7 @@ pub async fn create_comparison(
         .map(str::trim)
         .filter(|question| !question.is_empty())
     {
-        question.to_string()
+        sanitize_question(question)
     } else if let Some(template_id) = payload
         .template_id
         .as_deref()

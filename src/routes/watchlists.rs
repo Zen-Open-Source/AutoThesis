@@ -8,7 +8,10 @@ use crate::{
         WatchlistDetail,
     },
     services::{dashboard, orchestrator},
-    utils::{normalize_ticker, normalize_tickers, render_question_for_ticker, AppResult},
+    utils::{
+        normalize_ticker, normalize_tickers, render_question_for_ticker, sanitize_question,
+        AppResult,
+    },
 };
 use axum::{
     extract::{Path, Query, State},
@@ -223,7 +226,7 @@ pub async fn refresh_dashboard_ticker(
         .map(str::trim)
         .filter(|question| !question.is_empty())
     {
-        question.to_string()
+        sanitize_question(question)
     } else if let Some(template_id) = payload
         .template_id
         .as_deref()

@@ -128,15 +128,17 @@ impl PriceProvider {
     ) -> Result<Vec<PriceData>> {
         let period1 = start_date
             .and_hms_opt(0, 0, 0)
-            .unwrap()
+            .ok_or_else(|| anyhow!("invalid start_date time components"))?
             .and_local_timezone(Utc)
-            .unwrap()
+            .single()
+            .ok_or_else(|| anyhow!("ambiguous local timezone for start_date"))?
             .timestamp();
         let period2 = end_date
             .and_hms_opt(23, 59, 59)
-            .unwrap()
+            .ok_or_else(|| anyhow!("invalid end_date time components"))?
             .and_local_timezone(Utc)
-            .unwrap()
+            .single()
+            .ok_or_else(|| anyhow!("ambiguous local timezone for end_date"))?
             .timestamp();
 
         let url = format!(
