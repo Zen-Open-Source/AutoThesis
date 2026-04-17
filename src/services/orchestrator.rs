@@ -348,13 +348,15 @@ async fn ensure_run_not_cancelled(state: &AppState, run_id: &str) -> Result<()> 
     }
     // Fallback: if the flag was never registered (e.g. a run was requeued
     // by an external mechanism) or is unknown, fall back to the DB status
-    // so cancellation still eventually kicks in.
-    let run = state
+    // so cancellation still eventually kicks in. Use the lightweight
+    // status-only query to avoid materializing the entire run row on every
+    // orchestrator checkpoint.
+    let status = state
         .db
-        .get_run(run_id)
+        .get_run_status(run_id)
         .await?
         .ok_or_else(|| anyhow!("run not found while checking status: {run_id}"))?;
-    if RunStatus::parse(&run.status) == Some(RunStatus::Cancelled) {
+    if RunStatus::parse(&status) == Some(RunStatus::Cancelled) {
         return Err(RunCancelled.into());
     }
     Ok(())

@@ -120,6 +120,20 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Lightweight variant of [`Database::get_run`] that only reads the
+    /// `status` column. Intended for tight loops (e.g. cancellation checks in
+    /// the orchestrator) where fetching the whole `Run` row is wasteful.
+    pub async fn get_run_status(&self, run_id: &str) -> Result<Option<String>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT status FROM runs WHERE id = ?1",
+            [run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub async fn set_run_status(&self, run_id: &str, status: &str) -> Result<()> {
         let conn = self.open_connection()?;
         conn.execute(
