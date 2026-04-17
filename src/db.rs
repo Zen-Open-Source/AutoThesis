@@ -445,6 +445,17 @@ impl Database {
         collect_rows(rows)
     }
 
+    pub async fn get_source(&self, source_id: &str) -> Result<Option<SourceRecord>> {
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT * FROM sources WHERE id = ?1",
+            [source_id],
+            map_source,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub async fn list_sources_for_run(&self, run_id: &str) -> Result<Vec<SourceRecord>> {
         let conn = self.open_connection()?;
         let mut statement = conn.prepare(

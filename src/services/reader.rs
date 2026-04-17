@@ -66,13 +66,7 @@ pub async fn hydrate_sources(
                     .await?;
             }
         }
-        if let Some(updated) = state
-            .db
-            .list_sources(iteration_id)
-            .await?
-            .into_iter()
-            .find(|candidate| candidate.id == source.id)
-        {
+        if let Some(updated) = state.db.get_source(&source.id).await? {
             hydrated.push(updated);
         }
     }
