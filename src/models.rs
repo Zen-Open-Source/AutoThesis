@@ -1013,6 +1013,9 @@ pub struct WatchlistSchedule {
     pub last_refresh_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub refresh_template_id: Option<String>,
+    pub consecutive_failures: i64,
+    pub last_failure_at: Option<DateTime<Utc>>,
+    pub last_failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1026,6 +1029,7 @@ pub struct ScheduledRun {
     pub completed_at: Option<DateTime<Utc>>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1113,6 +1113,132 @@ async fn alerts_endpoints_work_and_dashboard_exposes_active_alerts() -> Result<(
     Ok(())
 }
 
+#[tokio::test]
+async fn scheduler_records_backoff_on_failure() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let watchlist = ctx.state.db.create_watchlist("Failing watchlist").await?;
+
+    // Kick off an initial schedule; next_refresh_at will be interval hours out.
+    ctx.state
+        .db
+        .update_watchlist_schedule(&watchlist.id, true, 2, None)
+        .await?;
+
+    // Record a failure and capture the new next_refresh_at the DB produces.
+    let next_after_1 = ctx
+        .state
+        .db
+        .record_watchlist_refresh_failure(&watchlist.id, 2, "test reason")
+        .await?;
+    let schedule1 = ctx
+        .state
+        .db
+        .get_watchlist_schedule(&watchlist.id)
+        .await?
+        .expect("schedule");
+
+    assert_eq!(schedule1.consecutive_failures, 1);
+    assert_eq!(
+        schedule1.last_failure_reason.as_deref(),
+        Some("test reason")
+    );
+    assert!(schedule1.last_failure_at.is_some());
+
+    // First failure: backoff = interval * 2^1 = 4 hours. The stored
+    // next_refresh_at should match what the method returned.
+    assert_eq!(schedule1.next_refresh_at, Some(next_after_1));
+
+    // Second failure should push the window further out than the first.
+    let next_after_2 = ctx
+        .state
+        .db
+        .record_watchlist_refresh_failure(&watchlist.id, 2, "still failing")
+        .await?;
+    let schedule2 = ctx
+        .state
+        .db
+        .get_watchlist_schedule(&watchlist.id)
+        .await?
+        .expect("schedule");
+    assert_eq!(schedule2.consecutive_failures, 2);
+    assert!(next_after_2 > next_after_1);
+
+    // A success clears the failure counters.
+    ctx.state
+        .db
+        .record_watchlist_refresh_success(&watchlist.id, 2)
+        .await?;
+    let schedule3 = ctx
+        .state
+        .db
+        .get_watchlist_schedule(&watchlist.id)
+        .await?
+        .expect("schedule");
+    assert_eq!(schedule3.consecutive_failures, 0);
+    assert!(schedule3.last_failure_at.is_none());
+    assert!(schedule3.last_failure_reason.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn scheduler_reaps_stuck_scheduled_runs() -> Result<()> {
+    let ctx = TestContext::new(1, false).await?;
+
+    let watchlist = ctx.state.db.create_watchlist("Reaper test").await?;
+    ctx.state
+        .db
+        .replace_watchlist_tickers(&watchlist.id, &["NVDA".to_string()])
+        .await?;
+
+    // Create a real run, drive it to completion, but leave the corresponding
+    // scheduled_run row stuck in `running`.
+    let run = ctx.state.db.create_run("NVDA", "stuck test").await?;
+    let scheduled = ctx
+        .state
+        .db
+        .create_scheduled_run(&watchlist.id, "NVDA", &run.id)
+        .await?;
+    ctx.state
+        .db
+        .update_scheduled_run_started(&scheduled.id)
+        .await?;
+
+    // Mark the run itself as completed (simulating an orchestrator task that
+    // finished before the scheduler could record completion, e.g. a crash).
+    ctx.state.db.set_run_status(&run.id, "completed").await?;
+
+    let before = ctx
+        .state
+        .db
+        .get_pending_scheduled_run_for_ticker(&watchlist.id, "NVDA")
+        .await?;
+    assert!(
+        before.is_some(),
+        "scheduled_run should be in pending/running before reap"
+    );
+
+    let reaped = ctx.state.db.reap_stuck_scheduled_runs().await?;
+    assert_eq!(reaped, 1);
+
+    let after = ctx
+        .state
+        .db
+        .get_pending_scheduled_run_for_ticker(&watchlist.id, "NVDA")
+        .await?;
+    assert!(
+        after.is_none(),
+        "scheduled_run should no longer be pending/running after reap"
+    );
+
+    let runs = ctx.state.db.list_scheduled_runs(&watchlist.id, 5).await?;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, "completed");
+
+    Ok(())
+}
+
 struct TestContext {
     _temp_dir: TempDir,
     state: AppState,

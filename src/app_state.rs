@@ -12,8 +12,12 @@ use crate::{
     },
 };
 use anyhow::{anyhow, Context, Result};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use tokio::sync::Semaphore;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
+use tokio::sync::{Mutex, Semaphore};
 
 #[derive(Clone)]
 pub struct PromptStore {
@@ -70,6 +74,12 @@ pub struct AppState {
     /// dashboard refresh) must acquire a permit from this semaphore before
     /// kicking off the orchestrator. See `crate::services::orchestrator::spawn_bounded_run`.
     pub run_semaphore: Arc<Semaphore>,
+    /// Tickers with a currently in-flight *scheduled* run (spawned either by
+    /// the scheduler tick or by a manual `trigger_watchlist_refresh`).
+    /// Shared between both code paths so manual triggers respect the same
+    /// per-ticker deduplication and `scheduler_max_concurrent_runs` cap that
+    /// the background loop enforces.
+    pub active_scheduled_runs: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AppState {
@@ -93,6 +103,7 @@ impl AppState {
             price_provider,
             cancellation: CancellationRegistry::new(),
             run_semaphore,
+            active_scheduled_runs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 

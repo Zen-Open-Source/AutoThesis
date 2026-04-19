@@ -9,18 +9,30 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-/// Tracks active runs to limit concurrency.
+/// Tickers with an in-flight scheduled run. The scheduler uses this to keep
+/// total concurrency under `scheduler_max_concurrent_runs` and to avoid
+/// enqueueing a second scheduled run for a ticker that already has one in
+/// progress.
 pub type ActiveRunTracker = Arc<Mutex<HashSet<String>>>;
+
+/// How often (in scheduler ticks) to sweep for stuck `scheduled_runs` rows
+/// whose underlying `runs` row already reached a terminal status.
+const REAP_EVERY_N_TICKS: u64 = 10;
+
+/// If `next_refresh_at` is more than `refresh_interval_hours * this` in the
+/// past we log a warning, but we still only run one batch of work. This
+/// prevents the scheduler from firing a flood of refreshes after the process
+/// has been offline for a long time.
+const CATCH_UP_WARN_MULTIPLIER: i64 = 4;
 
 /// Start the scheduler background loop.
 pub fn start_scheduler(state: AppState) -> ActiveRunTracker {
-    let active_runs: ActiveRunTracker = Arc::new(Mutex::new(HashSet::new()));
-    let active_runs_clone = active_runs.clone();
+    let active_runs = state.active_scheduled_runs.clone();
     let check_interval = state.config.scheduler_check_interval_secs;
 
     if !state.config.scheduler_enabled {
         info!("scheduler disabled via configuration");
-        return active_runs;
+        return active_runs.clone();
     }
 
     info!(
@@ -30,21 +42,39 @@ pub fn start_scheduler(state: AppState) -> ActiveRunTracker {
         "starting scheduler"
     );
 
+    let state_clone = state.clone();
     tokio::spawn(async move {
+        // Startup: reconcile any scheduled_runs left in `running` by a crash.
+        match state_clone.db.reap_stuck_scheduled_runs().await {
+            Ok(n) if n > 0 => info!(reaped = n, "reaped stuck scheduled runs on startup"),
+            Ok(_) => {}
+            Err(error) => error!(%error, "startup stuck-run reap failed"),
+        }
+
+        let mut tick: u64 = 0;
         loop {
-            if let Err(error) = run_scheduler_tick(&state, &active_runs_clone).await {
+            if let Err(error) = run_scheduler_tick(&state_clone).await {
                 error!(error = %error, "scheduler tick failed");
+            }
+
+            tick = tick.wrapping_add(1);
+            if tick % REAP_EVERY_N_TICKS == 0 {
+                match state_clone.db.reap_stuck_scheduled_runs().await {
+                    Ok(n) if n > 0 => info!(reaped = n, "reaped stuck scheduled runs"),
+                    Ok(_) => {}
+                    Err(error) => error!(%error, "periodic stuck-run reap failed"),
+                }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(check_interval)).await;
         }
     });
 
-    active_runs
+    state.active_scheduled_runs.clone()
 }
 
 /// Run a single scheduler tick.
-async fn run_scheduler_tick(state: &AppState, active_runs: &ActiveRunTracker) -> Result<()> {
+async fn run_scheduler_tick(state: &AppState) -> Result<()> {
     let due_watchlists = state.db.get_watchlists_due_for_refresh().await?;
 
     if due_watchlists.is_empty() {
@@ -54,15 +84,47 @@ async fn run_scheduler_tick(state: &AppState, active_runs: &ActiveRunTracker) ->
     info!(count = due_watchlists.len(), "processing due watchlists");
 
     for (watchlist, schedule) in due_watchlists {
-        if let Err(error) =
-            process_watchlist_refresh(state, active_runs, &watchlist, &schedule).await
-        {
+        // Catch-up guard: if this watchlist is significantly overdue we still
+        // only run one batch, but we surface it in the logs so the operator
+        // knows the system is recovering from downtime.
+        if let Some(next) = schedule.next_refresh_at {
+            let overdue_hours = (Utc::now() - next).num_hours();
+            let threshold = schedule
+                .refresh_interval_hours
+                .saturating_mul(CATCH_UP_WARN_MULTIPLIER);
+            if overdue_hours > threshold && threshold > 0 {
+                warn!(
+                    watchlist_id = %watchlist.id,
+                    overdue_hours,
+                    interval_hours = schedule.refresh_interval_hours,
+                    "watchlist is significantly overdue (catching up one batch only)"
+                );
+            }
+        }
+
+        if let Err(error) = process_watchlist_refresh(state, &watchlist, &schedule).await {
             error!(
                 watchlist_id = %watchlist.id,
                 watchlist_name = %watchlist.name,
                 error = %error,
                 "watchlist refresh failed"
             );
+            // Apply backoff so we don't retry every tick on a broken watchlist.
+            if let Err(record_err) = state
+                .db
+                .record_watchlist_refresh_failure(
+                    &watchlist.id,
+                    schedule.refresh_interval_hours,
+                    &error.to_string(),
+                )
+                .await
+            {
+                error!(
+                    watchlist_id = %watchlist.id,
+                    error = %record_err,
+                    "failed to record watchlist refresh failure"
+                );
+            }
         }
     }
 
@@ -72,7 +134,6 @@ async fn run_scheduler_tick(state: &AppState, active_runs: &ActiveRunTracker) ->
 /// Process refresh for a single watchlist.
 async fn process_watchlist_refresh(
     state: &AppState,
-    active_runs: &ActiveRunTracker,
     watchlist: &crate::models::Watchlist,
     schedule: &crate::models::WatchlistSchedule,
 ) -> Result<()> {
@@ -80,14 +141,20 @@ async fn process_watchlist_refresh(
 
     if tickers.is_empty() {
         info!(watchlist_id = %watchlist.id, "watchlist has no tickers, skipping");
+        // An empty watchlist isn't really a "failure" - clear the failure
+        // state and push `next_refresh_at` one interval out so we try again
+        // later (maybe the user added tickers).
+        state
+            .db
+            .record_watchlist_refresh_success(&watchlist.id, schedule.refresh_interval_hours)
+            .await?;
         return Ok(());
     }
 
-    let mut runs_spawned = 0;
+    let active_runs = state.active_scheduled_runs.clone();
     let max_concurrent = state.config.scheduler_max_concurrent_runs;
     let min_age_hours = state.config.scheduler_min_ticker_age_hours;
 
-    // Get count of currently active runs
     let active_count = active_runs.lock().await.len();
     let available_slots = max_concurrent.saturating_sub(active_count);
 
@@ -101,27 +168,26 @@ async fn process_watchlist_refresh(
         return Ok(());
     }
 
+    let mut runs_spawned = 0usize;
+    let mut spawn_errors: Vec<String> = Vec::new();
+
     for watchlist_ticker in tickers {
         if runs_spawned >= available_slots {
             break;
         }
 
-        // Check if ticker has an active run
         let has_active_run = {
             let guard = active_runs.lock().await;
             guard.contains(&watchlist_ticker.ticker)
         };
-
         if has_active_run {
             continue;
         }
 
-        // Check if ticker was recently refreshed
         let recent_runs = state
             .db
             .list_runs_for_ticker(&watchlist_ticker.ticker, 1)
             .await?;
-
         if let Some(latest_run) = recent_runs.first() {
             let hours_since_update = (Utc::now() - latest_run.updated_at).num_hours();
             if hours_since_update < min_age_hours {
@@ -129,19 +195,17 @@ async fn process_watchlist_refresh(
             }
         }
 
-        // Check if there's already a pending scheduled run
         let pending = state
             .db
             .get_pending_scheduled_run_for_ticker(&watchlist.id, &watchlist_ticker.ticker)
             .await?;
-
         if pending.is_some() {
             continue;
         }
 
         match spawn_scheduled_run(
             state,
-            active_runs,
+            &active_runs,
             &watchlist.id,
             &watchlist_ticker.ticker,
             schedule,
@@ -164,6 +228,7 @@ async fn process_watchlist_refresh(
                     error = %error,
                     "failed to spawn scheduled run"
                 );
+                spawn_errors.push(format!("{}: {error}", watchlist_ticker.ticker));
             }
         }
     }
@@ -171,7 +236,26 @@ async fn process_watchlist_refresh(
     if runs_spawned > 0 {
         state
             .db
-            .mark_watchlist_refreshed(&watchlist.id, schedule.refresh_interval_hours)
+            .record_watchlist_refresh_success(&watchlist.id, schedule.refresh_interval_hours)
+            .await?;
+    } else if !spawn_errors.is_empty() {
+        // Every attempted spawn failed (or we had nothing spawnable *and*
+        // there were errors). Back off so we don't hammer a broken provider.
+        state
+            .db
+            .record_watchlist_refresh_failure(
+                &watchlist.id,
+                schedule.refresh_interval_hours,
+                &spawn_errors.join("; "),
+            )
+            .await?;
+    } else {
+        // Nothing to spawn, but nothing failed either (all tickers filtered
+        // by dedup / recency). Treat as a no-op success so we try again at
+        // the normal cadence rather than staying due forever.
+        state
+            .db
+            .record_watchlist_refresh_success(&watchlist.id, schedule.refresh_interval_hours)
             .await?;
     }
 
@@ -246,13 +330,14 @@ async fn spawn_scheduled_run(
         }
 
         let success = result.is_ok();
-        if let Err(error) = &result {
-            error!(%run_id, error = %error, "scheduled run failed");
+        let error_message = result.as_ref().err().map(|e| e.to_string());
+        if let Some(ref msg) = error_message {
+            error!(%run_id, error = %msg, "scheduled run failed");
         }
 
         if let Err(error) = state_clone
             .db
-            .update_scheduled_run_completed(&scheduled_run_id, success)
+            .update_scheduled_run_completed(&scheduled_run_id, success, error_message.as_deref())
             .await
         {
             error!(%scheduled_run_id, error = %error, "failed to update scheduled run status");
@@ -262,7 +347,10 @@ async fn spawn_scheduled_run(
     Ok(scheduled_run)
 }
 
-/// Manually trigger a refresh for all tickers in a watchlist.
+/// Manually trigger a refresh for all tickers in a watchlist. Participates in
+/// the same `active_scheduled_runs` tracker as the background loop so two
+/// concurrent triggers (or a trigger firing while a tick is in progress) can
+/// neither double-run a ticker nor exceed `scheduler_max_concurrent_runs`.
 pub async fn trigger_watchlist_refresh(state: &AppState, watchlist_id: &str) -> Result<i64> {
     let _watchlist = state
         .db
@@ -281,14 +369,26 @@ pub async fn trigger_watchlist_refresh(state: &AppState, watchlist_id: &str) -> 
             last_refresh_at: None,
             next_refresh_at: None,
             refresh_template_id: None,
+            consecutive_failures: 0,
+            last_failure_at: None,
+            last_failure_reason: None,
         });
 
     let tickers = state.db.list_watchlist_tickers(watchlist_id).await?;
+    let max_concurrent = state.config.scheduler_max_concurrent_runs;
+    let active_runs = state.active_scheduled_runs.clone();
+
     let mut spawned = 0i64;
-
-    let active_runs: ActiveRunTracker = Arc::new(Mutex::new(HashSet::new()));
-
     for watchlist_ticker in &tickers {
+        // Respect the global concurrency cap even for manual triggers.
+        if active_runs.lock().await.len() >= max_concurrent {
+            break;
+        }
+        // Skip tickers already running.
+        if active_runs.lock().await.contains(&watchlist_ticker.ticker) {
+            continue;
+        }
+
         if spawn_scheduled_run(
             state,
             &active_runs,
@@ -305,7 +405,7 @@ pub async fn trigger_watchlist_refresh(state: &AppState, watchlist_id: &str) -> 
 
     state
         .db
-        .mark_watchlist_refreshed(watchlist_id, schedule.refresh_interval_hours)
+        .record_watchlist_refresh_success(watchlist_id, schedule.refresh_interval_hours)
         .await?;
 
     info!(

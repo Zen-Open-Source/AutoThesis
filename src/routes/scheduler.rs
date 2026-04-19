@@ -33,6 +33,9 @@ pub async fn get_watchlist_schedule(
             last_refresh_at: None,
             next_refresh_at: None,
             refresh_template_id: None,
+            consecutive_failures: 0,
+            last_failure_at: None,
+            last_failure_reason: None,
         });
 
     let scheduled_runs = state
@@ -169,6 +172,9 @@ pub async fn resume_watchlist_schedule(
             last_refresh_at: None,
             next_refresh_at: None,
             refresh_template_id: None,
+            consecutive_failures: 0,
+            last_failure_at: None,
+            last_failure_reason: None,
         });
 
     state
