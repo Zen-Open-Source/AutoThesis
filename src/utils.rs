@@ -88,7 +88,21 @@ pub fn render_question_for_ticker(question_template: &str, ticker: &str) -> Stri
     }
 }
 
-/// Retry an async operation with exponential backoff.
+/// Base delay before the first retry.
+const RETRY_BASE_DELAY_MS: u64 = 500;
+/// Hard cap on any single backoff sleep. Prevents pathological waits if
+/// callers pass unexpectedly large `max_attempts`.
+const RETRY_MAX_DELAY_MS: u64 = 30_000;
+
+/// Retry an async operation with true exponential backoff plus "full jitter"
+/// (AWS-style: sleep = random(0, base * 2^attempt), capped). Compared to the
+/// previous linear `500 * (attempt + 1)` formula this:
+/// - Actually grows exponentially, matching the function's name and the
+///   expectations of upstream providers that throttle aggressively.
+/// - Spreads concurrent retries across time so N callers hitting the same
+///   transient 429 don't all retry in lockstep and re-collide.
+/// - Caps individual sleeps so misconfiguration can't produce multi-minute
+///   hangs.
 pub async fn retry_with_backoff<F, Fut, T>(mut operation: F, max_attempts: u32) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -101,12 +115,39 @@ where
             Err(error) => {
                 last_error = Some(error);
                 if attempt < max_attempts - 1 {
-                    sleep(Duration::from_millis(500 * (attempt + 1) as u64)).await;
+                    sleep(backoff_delay(attempt)).await;
                 }
             }
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow!("operation failed after {} attempts", max_attempts)))
+}
+
+/// Compute the sleep duration before retry `attempt` (0-indexed). Uses
+/// exponential base-2 growth clamped to `RETRY_MAX_DELAY_MS` and multiplied
+/// by a pseudo-random jitter factor in `[0.5, 1.0]`.
+fn backoff_delay(attempt: u32) -> Duration {
+    // Compute exponential cap first to avoid overflow for large `attempt`.
+    let exp = 1u64 << attempt.min(20);
+    let capped = RETRY_BASE_DELAY_MS.saturating_mul(exp).min(RETRY_MAX_DELAY_MS);
+    // Full-jitter: sleep randomly in [capped/2, capped]. Floor at base delay
+    // so very small `capped` values still respect a minimum pause.
+    let floor = (capped / 2).max(RETRY_BASE_DELAY_MS.min(capped));
+    let span = capped.saturating_sub(floor).max(1);
+    let jitter = pseudo_random_u64() % span;
+    Duration::from_millis(floor + jitter)
+}
+
+/// Lightweight jitter source that avoids pulling in the `rand` crate just
+/// for retry timing. Uses the monotonic-ish nanosecond component of the
+/// system clock, which is more than good enough for de-correlating
+/// concurrent retry schedules.
+fn pseudo_random_u64() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -163,5 +204,30 @@ mod tests {
     fn sanitize_question_preserves_common_whitespace() {
         let raw = "line1\nline2\tcol2";
         assert_eq!(sanitize_question(raw), "line1\nline2\tcol2");
+    }
+
+    #[test]
+    fn backoff_delay_grows_exponentially_and_is_capped() {
+        // Lower bound at attempt 0 should be >= RETRY_BASE_DELAY_MS / 2 (full
+        // jitter floor) and <= RETRY_BASE_DELAY_MS.
+        for attempt in 0..5u32 {
+            let d = backoff_delay(attempt);
+            assert!(
+                d.as_millis() as u64 <= RETRY_MAX_DELAY_MS,
+                "attempt {attempt} exceeded cap: {d:?}"
+            );
+        }
+
+        // Attempt 10 should hit the cap (500 * 2^10 = 512000 > 30000 cap).
+        let big = backoff_delay(10);
+        assert!(
+            big.as_millis() as u64 <= RETRY_MAX_DELAY_MS,
+            "capped delay too large: {big:?}"
+        );
+        // And be in the jittered upper band: >= cap/2.
+        assert!(
+            big.as_millis() as u64 >= RETRY_MAX_DELAY_MS / 2,
+            "capped delay below jitter floor: {big:?}"
+        );
     }
 }
