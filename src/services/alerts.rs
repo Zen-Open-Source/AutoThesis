@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, models::AlertRule};
+use crate::{app_state::AppState, models::AlertRule, status::RunStatus};
 use anyhow::Result;
 use chrono::Utc;
 
@@ -198,7 +198,13 @@ async fn build_snapshot(state: &AppState, ticker: &str) -> Result<TickerAlertSna
 }
 
 fn should_skip_status(status: &str) -> bool {
-    matches!(status, "queued" | "running" | "no_data")
+    if status == "no_data" {
+        return true;
+    }
+    matches!(
+        RunStatus::parse(status),
+        Some(RunStatus::Queued | RunStatus::Running)
+    )
 }
 
 fn is_decision_downgrade(previous: Option<&str>, current: &str) -> bool {
@@ -230,10 +236,12 @@ fn classify_decision(
     latest_score: Option<f64>,
     evidence_freshness: &str,
 ) -> String {
-    match latest_status {
-        "no_data" => "no_coverage".to_string(),
-        "queued" | "running" => "researching".to_string(),
-        "failed" | "cancelled" => "attention".to_string(),
+    if latest_status == "no_data" {
+        return "no_coverage".to_string();
+    }
+    match RunStatus::parse(latest_status) {
+        Some(RunStatus::Queued | RunStatus::Running) => "researching".to_string(),
+        Some(RunStatus::Failed | RunStatus::Cancelled) => "attention".to_string(),
         _ => match latest_score {
             Some(score) if score >= 8.0 && evidence_freshness == "fresh" => {
                 "high_conviction".to_string()

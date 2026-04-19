@@ -2,6 +2,7 @@ use crate::{
     app_state::AppState,
     models::{DashboardResponse, DashboardTickerRow},
     services::alerts::{self, TickerAlertSnapshot},
+    status::RunStatus,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -144,10 +145,12 @@ fn classify_decision(
     latest_score: Option<f64>,
     evidence_freshness: &str,
 ) -> String {
-    match latest_status {
-        "no_data" => "no_coverage".to_string(),
-        "queued" | "running" => "researching".to_string(),
-        "failed" | "cancelled" => "attention".to_string(),
+    if latest_status == "no_data" {
+        return "no_coverage".to_string();
+    }
+    match RunStatus::parse(latest_status) {
+        Some(RunStatus::Queued | RunStatus::Running) => "researching".to_string(),
+        Some(RunStatus::Failed | RunStatus::Cancelled) => "attention".to_string(),
         _ => match latest_score {
             Some(score) if score >= 8.0 && evidence_freshness == "fresh" => {
                 "high_conviction".to_string()

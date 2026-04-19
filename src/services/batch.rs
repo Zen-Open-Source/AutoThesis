@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, models::BatchJobRunWithDetails};
+use crate::{app_state::AppState, models::BatchJobRunWithDetails, status::RunStatus};
 use anyhow::Result;
 
 pub async fn sync_batch_jobs_for_run(state: &AppState, run_id: &str) -> Result<()> {
@@ -14,7 +14,7 @@ async fn sync_single_batch_job(state: &AppState, batch_job_id: &str) -> Result<(
     if batch_job_runs.is_empty() {
         state
             .db
-            .update_batch_job_status(batch_job_id, "queued")
+            .update_batch_job_status(batch_job_id, RunStatus::Queued.as_str())
             .await?;
         return Ok(());
     }
@@ -25,26 +25,30 @@ async fn sync_single_batch_job(state: &AppState, batch_job_id: &str) -> Result<(
     let mut has_queued = false;
 
     for batch_job_run in &batch_job_runs {
+        // Any status the DB returns that we don't recognise (e.g. a future
+        // "retrying" state) is treated as in-flight so we don't prematurely
+        // finalise the batch.
         let status = batch_job_run
             .run
             .as_ref()
-            .map(|run| run.status.as_str())
-            .unwrap_or("queued");
+            .and_then(|run| RunStatus::parse(&run.status))
+            .unwrap_or(RunStatus::Queued);
         match status {
-            "completed" => completed_count += 1,
-            "failed" | "cancelled" => failed_count += 1,
-            "queued" => has_queued = true,
-            _ => has_running = true,
+            RunStatus::Completed => completed_count += 1,
+            RunStatus::Failed | RunStatus::Cancelled => failed_count += 1,
+            RunStatus::Queued => has_queued = true,
+            RunStatus::Running => has_running = true,
         }
     }
 
     let all_terminal = completed_count + failed_count == batch_job_runs.len();
     if all_terminal {
         let status = if failed_count == 0 {
-            "completed"
+            RunStatus::Completed.as_str()
         } else if completed_count == 0 {
-            "failed"
+            RunStatus::Failed.as_str()
         } else {
+            // Domain-specific composite status that doesn't map to RunStatus.
             "failed_partial"
         };
         let summary = build_batch_summary(&batch_job_runs, completed_count, failed_count);
@@ -54,15 +58,15 @@ async fn sync_single_batch_job(state: &AppState, batch_job_id: &str) -> Result<(
             .await?;
     } else {
         let status = if has_running {
-            "running"
+            RunStatus::Running
         } else if has_queued {
-            "queued"
+            RunStatus::Queued
         } else {
-            "running"
+            RunStatus::Running
         };
         state
             .db
-            .update_batch_job_status(batch_job_id, status)
+            .update_batch_job_status(batch_job_id, status.as_str())
             .await?;
     }
     Ok(())

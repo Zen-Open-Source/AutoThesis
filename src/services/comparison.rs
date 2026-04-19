@@ -1,4 +1,4 @@
-use crate::{app_state::AppState, models::ComparisonRunWithDetails};
+use crate::{app_state::AppState, models::ComparisonRunWithDetails, status::RunStatus};
 use anyhow::Result;
 
 pub async fn sync_comparisons_for_run(state: &AppState, run_id: &str) -> Result<()> {
@@ -14,7 +14,7 @@ async fn sync_single_comparison(state: &AppState, comparison_id: &str) -> Result
     if comparison_runs.is_empty() {
         state
             .db
-            .update_comparison_status(comparison_id, "queued")
+            .update_comparison_status(comparison_id, RunStatus::Queued.as_str())
             .await?;
         return Ok(());
     }
@@ -28,13 +28,13 @@ async fn sync_single_comparison(state: &AppState, comparison_id: &str) -> Result
         let status = comparison_run
             .run
             .as_ref()
-            .map(|run| run.status.as_str())
-            .unwrap_or("queued");
+            .and_then(|run| RunStatus::parse(&run.status))
+            .unwrap_or(RunStatus::Queued);
         match status {
-            "completed" => completed_count += 1,
-            "failed" | "cancelled" => failed_count += 1,
-            "queued" => has_queued = true,
-            _ => has_running = true,
+            RunStatus::Completed => completed_count += 1,
+            RunStatus::Failed | RunStatus::Cancelled => failed_count += 1,
+            RunStatus::Queued => has_queued = true,
+            RunStatus::Running => has_running = true,
         }
     }
 
@@ -48,15 +48,15 @@ async fn sync_single_comparison(state: &AppState, comparison_id: &str) -> Result
             .await?;
     } else {
         let status = if has_running {
-            "running"
+            RunStatus::Running
         } else if has_queued {
-            "queued"
+            RunStatus::Queued
         } else {
-            "running"
+            RunStatus::Running
         };
         state
             .db
-            .update_comparison_status(comparison_id, status)
+            .update_comparison_status(comparison_id, status.as_str())
             .await?;
     }
 
@@ -69,10 +69,11 @@ fn build_terminal_rollup(
     failed_count: usize,
 ) -> (&'static str, Option<String>, String) {
     let status = if failed_count == 0 {
-        "completed"
+        RunStatus::Completed.as_str()
     } else if completed_count == 0 {
-        "failed"
+        RunStatus::Failed.as_str()
     } else {
+        // Domain-specific composite status outside the RunStatus enum.
         "failed_partial"
     };
 
@@ -83,7 +84,7 @@ fn build_terminal_rollup(
                 .run
                 .as_ref()
                 .map(|run| run.status.as_str())
-                .unwrap_or("queued");
+                .unwrap_or(RunStatus::Queued.as_str());
             let run_summary = comparison_run
                 .run
                 .as_ref()
@@ -108,7 +109,7 @@ fn build_terminal_rollup(
                 .run
                 .as_ref()
                 .map(|run| run.status.as_str())
-                .unwrap_or("queued");
+                .unwrap_or(RunStatus::Queued.as_str());
             let run_summary = comparison_run
                 .run
                 .as_ref()

@@ -497,10 +497,13 @@ pub async fn batch_detail(
         })
         .collect();
     let has_pending_runs = batch_runs.iter().any(|run| {
-        run.status != "completed"
-            && run.status != "failed"
-            && run.status != "failed_partial"
-            && run.status != "cancelled"
+        // A run is "pending" if it is still in-flight. We additionally treat
+        // "failed_partial" (a composite batch-level state set by
+        // services::batch, not a RunStatus) as terminal.
+        let is_terminal = RunStatus::parse(&run.status)
+            .map(RunStatus::is_terminal)
+            .unwrap_or(false);
+        !is_terminal && run.status != "failed_partial"
     });
 
     Ok(Html(
@@ -792,7 +795,9 @@ pub async fn scanner_index(State(state): State<AppState>) -> AppResult<Html<Stri
         .collect();
 
     let has_scan_running = has_latest_scan_run
-        && (latest_scan_run_status == "running" || latest_scan_run_status == "queued");
+        && RunStatus::parse(&latest_scan_run_status)
+            .map(RunStatus::is_in_flight)
+            .unwrap_or(false);
 
     let html = ScannerTemplate {
         has_latest_scan_run,
