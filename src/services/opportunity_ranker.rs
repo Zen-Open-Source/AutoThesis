@@ -43,7 +43,7 @@ pub fn calculate_overall_score(
         + (coverage_gap * 0.25)
         + (timing * 0.20);
 
-    weighted_score.min(10.0).max(0.0)
+    weighted_score.clamp(0.0, 10.0)
 }
 
 /// Rank opportunities by overall score.

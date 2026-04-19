@@ -1,4 +1,7 @@
-use crate::{app_state::AppState, models::ComparisonRunWithDetails, status::RunStatus};
+use crate::{
+    app_state::AppState, markdown::escape_html, models::ComparisonRunWithDetails,
+    status::RunStatus,
+};
 use anyhow::Result;
 
 pub async fn sync_comparisons_for_run(state: &AppState, run_id: &str) -> Result<()> {
@@ -134,10 +137,4 @@ fn build_terminal_rollup(
     (status, summary, final_html)
 }
 
-fn escape_html(raw: &str) -> String {
-    raw.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
+

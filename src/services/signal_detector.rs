@@ -96,7 +96,7 @@ pub fn calculate_signal_strength(signals: &[ScanSignal]) -> f64 {
         .sum();
 
     let avg_weight = total_weight / signals.len() as f64;
-    (avg_weight * 10.0).min(10.0).max(0.0)
+    (avg_weight * 10.0).clamp(0.0, 10.0)
 }
 
 /// Calculate timing score based on signal freshness.
