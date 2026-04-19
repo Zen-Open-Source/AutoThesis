@@ -1727,6 +1727,56 @@ impl Database {
         }))
     }
 
+    /// Batch variant of [`Database::get_latest_iteration_evaluation_score`].
+    /// Returns a map from run_id to score for the latest iteration with an
+    /// `evaluation_json` payload. Missing runs / runs with no evaluated
+    /// iteration are simply absent from the map. Used by the dashboard and
+    /// alerts path to avoid N+1 score lookups.
+    pub async fn latest_scores_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, f64>> {
+        use std::collections::HashMap;
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.open_connection()?;
+        let placeholders: String = (0..run_ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        // Pick the iteration with the highest iteration_number per run_id.
+        let sql = format!(
+            "SELECT i.run_id, i.evaluation_json
+             FROM iterations i
+             INNER JOIN (
+                SELECT run_id, MAX(iteration_number) AS max_n
+                FROM iterations
+                WHERE run_id IN ({placeholders}) AND evaluation_json IS NOT NULL
+                GROUP BY run_id
+             ) latest ON latest.run_id = i.run_id AND latest.max_n = i.iteration_number"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|r| r as &dyn rusqlite::ToSql).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (run_id, raw) = row?;
+            if let Some(raw) = raw {
+                if let Some(score) = serde_json::from_str::<serde_json::Value>(&raw)
+                    .ok()
+                    .and_then(|value| value.get("score").and_then(|s| s.as_f64()))
+                {
+                    map.insert(run_id, score);
+                }
+            }
+        }
+        Ok(map)
+    }
+
     pub async fn get_latest_source_timestamp_for_run(
         &self,
         run_id: &str,
@@ -1748,6 +1798,87 @@ impl Database {
             Some(raw) => Ok(Some(parse_time(raw)?)),
             None => Ok(None),
         }
+    }
+
+    /// Batch variant of [`Database::get_latest_source_timestamp_for_run`].
+    /// Returns a map of run_id to the most recent source timestamp. Missing
+    /// runs / runs without sources are absent from the map.
+    pub async fn latest_source_timestamps_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, DateTime<Utc>>> {
+        use std::collections::HashMap;
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.open_connection()?;
+        let placeholders: String = (0..run_ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT run_id, MAX(COALESCE(published_at, created_at)) AS latest
+             FROM sources
+             WHERE run_id IN ({placeholders})
+             GROUP BY run_id"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|r| r as &dyn rusqlite::ToSql).collect();
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (run_id, raw) = row?;
+            if let Some(raw) = raw {
+                if let Some(ts) = parse_time_opt(&raw) {
+                    map.insert(run_id, ts);
+                }
+            }
+        }
+        Ok(map)
+    }
+
+    /// Fetch up to `limit` most-recent runs for each ticker in one query.
+    /// Used by the dashboard which needs the latest two runs per ticker.
+    pub async fn recent_runs_for_tickers(
+        &self,
+        tickers: &[String],
+        limit: i64,
+    ) -> Result<std::collections::HashMap<String, Vec<Run>>> {
+        use std::collections::HashMap;
+        if tickers.is_empty() || limit <= 0 {
+            return Ok(HashMap::new());
+        }
+        let conn = self.open_connection()?;
+        let placeholders: String = (0..tickers.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let limit_placeholder = tickers.len() + 1;
+        let sql = format!(
+            "SELECT id, ticker, question, status, created_at, updated_at,
+                    final_iteration_number, final_memo_markdown, final_memo_html, summary
+             FROM (
+                 SELECT r.*,
+                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY created_at DESC) AS rn
+                 FROM runs r
+                 WHERE ticker IN ({placeholders})
+             ) WHERE rn <= ?{limit_placeholder}
+             ORDER BY ticker, created_at DESC"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            tickers.iter().map(|t| t as &dyn rusqlite::ToSql).collect();
+        params.push(&limit as &dyn rusqlite::ToSql);
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params.as_slice(), map_run)?;
+        let mut map: HashMap<String, Vec<Run>> = HashMap::new();
+        for row in rows {
+            let run = row?;
+            map.entry(run.ticker.clone()).or_default().push(run);
+        }
+        Ok(map)
     }
 
     // Scanner database methods

@@ -19,69 +19,56 @@ pub async fn build_watchlist_dashboard(
     let watchlist_tickers = state.db.list_watchlist_tickers(watchlist_id).await?;
     let alert_rules = state.db.list_or_create_alert_rules(watchlist_id).await?;
 
+    // --- Single batched pre-fetch replaces the per-ticker N+1. ---
+    let ticker_ids: Vec<String> = watchlist_tickers
+        .iter()
+        .map(|wt| wt.ticker.clone())
+        .collect();
+    // Up to the two most-recent runs per ticker (latest + previous).
+    let runs_by_ticker = state.db.recent_runs_for_tickers(&ticker_ids, 2).await?;
+    // Collect run_ids so we can batch-fetch their scores / source freshness.
+    let run_ids: Vec<String> = runs_by_ticker
+        .values()
+        .flat_map(|runs| runs.iter().map(|r| r.id.clone()))
+        .collect();
+    let scores_by_run = state.db.latest_scores_for_runs(&run_ids).await?;
+    let source_ts_by_run = state.db.latest_source_timestamps_for_runs(&run_ids).await?;
+
     let mut rows = Vec::new();
     for watchlist_ticker in watchlist_tickers {
-        let recent_runs = state
-            .db
-            .list_runs_for_ticker(&watchlist_ticker.ticker, 2)
-            .await?;
-        let latest_run = recent_runs.first().cloned();
-        let previous_run = recent_runs.get(1).cloned();
+        let recent_runs: &[crate::models::Run] = runs_by_ticker
+            .get(&watchlist_ticker.ticker)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let latest_run = recent_runs.first();
+        let previous_run = recent_runs.get(1);
 
-        let latest_score = if let Some(run) = latest_run.as_ref() {
-            state
-                .db
-                .get_latest_iteration_evaluation_score(&run.id)
-                .await?
-        } else {
-            None
-        };
-        let previous_score = if let Some(run) = previous_run.as_ref() {
-            state
-                .db
-                .get_latest_iteration_evaluation_score(&run.id)
-                .await?
-        } else {
-            None
-        };
+        let latest_score = latest_run.and_then(|run| scores_by_run.get(&run.id).copied());
+        let previous_score = previous_run.and_then(|run| scores_by_run.get(&run.id).copied());
         let score_delta = match (latest_score, previous_score) {
             (Some(latest), Some(previous)) => Some(latest - previous),
             _ => None,
         };
         let trend = classify_trend(score_delta).to_string();
 
-        let latest_source_timestamp = if let Some(run) = latest_run.as_ref() {
-            state
-                .db
-                .get_latest_source_timestamp_for_run(&run.id)
-                .await?
-        } else {
-            None
-        };
+        let latest_source_timestamp =
+            latest_run.and_then(|run| source_ts_by_run.get(&run.id).copied());
         let evidence_freshness = classify_freshness(latest_source_timestamp);
-        let previous_evidence_freshness = if let Some(run) = previous_run.as_ref() {
-            classify_freshness(
-                state
-                    .db
-                    .get_latest_source_timestamp_for_run(&run.id)
-                    .await?,
-            )
-        } else {
-            "no_evidence".to_string()
-        };
+        let previous_evidence_freshness = previous_run
+            .map(|run| classify_freshness(source_ts_by_run.get(&run.id).copied()))
+            .unwrap_or_else(|| "no_evidence".to_string());
 
         let latest_status = latest_run
-            .as_ref()
             .map(|run| run.status.clone())
             .unwrap_or_else(|| "no_data".to_string());
         let decision_state = classify_decision(&latest_status, latest_score, &evidence_freshness);
-        let previous_decision_state = previous_run.as_ref().map(|run| {
+        let previous_decision_state = previous_run.map(|run| {
             classify_decision(&run.status, previous_score, &previous_evidence_freshness)
         });
 
         let snapshot = TickerAlertSnapshot {
             ticker: watchlist_ticker.ticker.clone(),
-            latest_run_id: latest_run.as_ref().map(|run| run.id.clone()),
+            latest_run_id: latest_run.map(|run| run.id.clone()),
             latest_status: latest_status.clone(),
             latest_score,
             previous_score,
@@ -93,17 +80,17 @@ pub async fn build_watchlist_dashboard(
 
         rows.push(DashboardTickerRow {
             ticker: watchlist_ticker.ticker,
-            latest_run_id: latest_run.as_ref().map(|run| run.id.clone()),
+            latest_run_id: latest_run.map(|run| run.id.clone()),
             latest_status,
             latest_score,
             previous_score,
             score_delta,
             trend,
-            summary: latest_run.as_ref().and_then(|run| run.summary.clone()),
+            summary: latest_run.and_then(|run| run.summary.clone()),
             evidence_freshness,
             decision_state,
             active_alert_count: 0,
-            last_run_updated_at: latest_run.as_ref().map(|run| run.updated_at),
+            last_run_updated_at: latest_run.map(|run| run.updated_at),
         });
     }
 
