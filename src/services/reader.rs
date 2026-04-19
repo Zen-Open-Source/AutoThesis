@@ -2,12 +2,19 @@ use crate::{
     app_state::AppState,
     db::Database,
     models::{EvidenceNoteInput, ReaderOutput, SourceRecord},
+    providers::fetch::FetchedPage,
     services::source_ranker::classify_source,
 };
 use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
+use tokio::task::JoinSet;
+
+/// Maximum number of concurrent source fetches per iteration. Bounded to
+/// avoid stampeding outbound servers with bursts of requests while still
+/// letting iterations finish noticeably faster than the old serial loop.
+const MAX_CONCURRENT_FETCHES: usize = 6;
 
 pub async fn hydrate_sources(
     state: &AppState,
@@ -15,10 +22,15 @@ pub async fn hydrate_sources(
     iteration_id: &str,
     sources: &[SourceRecord],
 ) -> Result<Vec<SourceRecord>> {
-    let mut hydrated = Vec::new();
+    // Fetch phase: run up to MAX_CONCURRENT_FETCHES HTTP requests in parallel
+    // and collect results in source order. DB writes follow in a second pass
+    // so that we stay on one SQLite connection at a time and keep event
+    // ordering deterministic.
+    let fetch_results = fetch_pages_parallel(state, sources).await;
 
-    for source in sources {
-        match state.fetcher.fetch(&source.url).await {
+    let mut hydrated = Vec::with_capacity(sources.len());
+    for (source, fetched) in sources.iter().zip(fetch_results.into_iter()) {
+        match fetched {
             Ok(page) => {
                 let source_type = classify_source(
                     page.domain.as_deref().unwrap_or_default(),
@@ -72,6 +84,51 @@ pub async fn hydrate_sources(
     }
 
     Ok(hydrated)
+}
+
+/// Fetch all source URLs in parallel, capped at MAX_CONCURRENT_FETCHES.
+/// Results are returned in the same order as the input `sources` slice.
+async fn fetch_pages_parallel(
+    state: &AppState,
+    sources: &[SourceRecord],
+) -> Vec<anyhow::Result<FetchedPage>> {
+    let mut set: JoinSet<(usize, anyhow::Result<FetchedPage>)> = JoinSet::new();
+    let mut results: Vec<Option<anyhow::Result<FetchedPage>>> =
+        (0..sources.len()).map(|_| None).collect();
+    let mut next_to_spawn = 0;
+
+    while next_to_spawn < sources.len() && set.len() < MAX_CONCURRENT_FETCHES {
+        let idx = next_to_spawn;
+        let fetcher = state.fetcher.clone();
+        let url = sources[idx].url.clone();
+        set.spawn(async move { (idx, fetcher.fetch(&url).await) });
+        next_to_spawn += 1;
+    }
+
+    while let Some(join_result) = set.join_next().await {
+        let (idx, res) = match join_result {
+            Ok(tuple) => tuple,
+            Err(join_error) => {
+                // A JoinError is either a panic or a cancellation - surface
+                // it as a fetch error so the caller still records the event.
+                let idx = next_to_spawn.saturating_sub(1);
+                (idx, Err(anyhow::anyhow!("fetch task failed: {join_error}")))
+            }
+        };
+        results[idx] = Some(res);
+        if next_to_spawn < sources.len() {
+            let spawn_idx = next_to_spawn;
+            let fetcher = state.fetcher.clone();
+            let url = sources[spawn_idx].url.clone();
+            set.spawn(async move { (spawn_idx, fetcher.fetch(&url).await) });
+            next_to_spawn += 1;
+        }
+    }
+
+    results
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(|| Err(anyhow::anyhow!("fetch result missing"))))
+        .collect()
 }
 
 pub async fn extract_evidence_notes(
