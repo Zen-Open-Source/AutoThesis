@@ -1,5 +1,6 @@
 use crate::{
     app_state::AppState,
+    db::RankedInsert,
     markdown::render_markdown,
     models::EvaluatorOutput,
     services::{
@@ -159,15 +160,10 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
             iteration_number,
         )
         .await?;
-        let mut stored_queries = Vec::new();
-        for query_text in query_texts {
-            stored_queries.push(
-                state
-                    .db
-                    .insert_search_query(&iteration.id, &query_text)
-                    .await?,
-            );
-        }
+        let stored_queries = state
+            .db
+            .insert_search_queries_batch(&iteration.id, &query_texts)
+            .await?;
         state
             .db
             .insert_event(
@@ -188,39 +184,27 @@ async fn execute_run_inner(state: AppState, run_id: &str) -> Result<()> {
         )
         .await?;
 
-        let mut inserted_sources = Vec::new();
-        for (query_id, result) in ranked_results {
-            state
-                .db
-                .insert_search_result(
-                    &iteration.id,
-                    &query_id,
-                    result.title.as_deref(),
-                    &result.url,
-                    result.snippet.as_deref(),
-                    Some(result.rank_score),
-                    Some(&result.source_type),
-                )
-                .await?;
-
-            let domain = Url::parse(&result.url)
-                .ok()
-                .and_then(|parsed| parsed.domain().map(|value| value.to_string()));
-            let source = state
-                .db
-                .insert_source(
-                    run_id,
-                    Some(&iteration.id),
-                    &result.url,
-                    result.title.as_deref(),
-                    domain.as_deref(),
-                    result.snippet.as_deref(),
-                    Some(result.rank_score),
-                    Some(&result.source_type),
-                )
-                .await?;
-            inserted_sources.push(source);
-        }
+        let ranked_inserts: Vec<RankedInsert> = ranked_results
+            .into_iter()
+            .map(|(query_id, result)| {
+                let domain = Url::parse(&result.url)
+                    .ok()
+                    .and_then(|parsed| parsed.domain().map(|value| value.to_string()));
+                RankedInsert {
+                    query_id,
+                    title: result.title,
+                    url: result.url,
+                    domain,
+                    snippet: result.snippet,
+                    rank_score: result.rank_score,
+                    source_type: result.source_type,
+                }
+            })
+            .collect();
+        let inserted_sources = state
+            .db
+            .insert_search_results_and_sources_batch(run_id, &iteration.id, &ranked_inserts)
+            .await?;
         state
             .db
             .insert_event(

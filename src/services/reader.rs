@@ -1,6 +1,6 @@
 use crate::{
     app_state::AppState,
-    db::Database,
+    db::{Database, EvidenceNoteInsert},
     models::{EvidenceNoteInput, ReaderOutput, SourceRecord},
     providers::fetch::FetchedPage,
     services::source_ranker::classify_source,
@@ -166,15 +166,18 @@ pub async fn persist_notes(
     iteration_id: &str,
     notes: &[EvidenceNoteInput],
 ) -> Result<()> {
-    for note in notes {
-        db.insert_evidence_note(
-            iteration_id,
-            &note.source_id,
-            &note.note_markdown,
-            Some(&note.claim_type),
-        )
-        .await?;
+    if notes.is_empty() {
+        return Ok(());
     }
+    let rows: Vec<EvidenceNoteInsert<'_>> = notes
+        .iter()
+        .map(|note| EvidenceNoteInsert {
+            source_id: note.source_id.as_str(),
+            note_markdown: note.note_markdown.as_str(),
+            claim_type: Some(note.claim_type.as_str()),
+        })
+        .collect();
+    db.insert_evidence_notes_batch(iteration_id, &rows).await?;
     Ok(())
 }
 

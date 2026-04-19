@@ -19,6 +19,29 @@ use uuid::Uuid;
 pub(crate) type SqlitePool = Pool<SqliteConnectionManager>;
 pub(crate) type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
+/// Input type for `Database::insert_search_results_and_sources_batch`.
+/// Keeps the batched API independent of service-layer types so we can
+/// avoid a circular dependency back into `services::source_ranker`.
+#[derive(Debug, Clone)]
+pub struct RankedInsert {
+    pub query_id: String,
+    pub title: Option<String>,
+    pub url: String,
+    pub domain: Option<String>,
+    pub snippet: Option<String>,
+    pub rank_score: f64,
+    pub source_type: String,
+}
+
+/// Borrowed input for `Database::insert_evidence_notes_batch` so the caller
+/// doesn't have to clone note strings just to hand them to us.
+#[derive(Debug, Clone, Copy)]
+pub struct EvidenceNoteInsert<'a> {
+    pub source_id: &'a str,
+    pub note_markdown: &'a str,
+    pub claim_type: Option<&'a str>,
+}
+
 #[derive(Clone)]
 pub struct Database {
     pool: Arc<SqlitePool>,
@@ -317,6 +340,44 @@ impl Database {
         collect_rows(rows)
     }
 
+    /// Insert many search queries for the same iteration under a single
+    /// transaction. SQLite issues one fsync per transaction, so folding N
+    /// inserts into one drops commit latency roughly in proportion to N.
+    pub async fn insert_search_queries_batch(
+        &self,
+        iteration_id: &str,
+        query_texts: &[String],
+    ) -> Result<Vec<SearchQueryRecord>> {
+        if query_texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction()?;
+        let mut records = Vec::with_capacity(query_texts.len());
+        {
+            let mut statement = tx.prepare(
+                "INSERT INTO search_queries (id, iteration_id, query_text, created_at) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for query_text in query_texts {
+                let record = SearchQueryRecord {
+                    id: Uuid::new_v4().to_string(),
+                    iteration_id: iteration_id.to_string(),
+                    query_text: query_text.clone(),
+                    created_at: Utc::now(),
+                };
+                statement.execute(params![
+                    record.id,
+                    record.iteration_id,
+                    record.query_text,
+                    encode_time(record.created_at),
+                ])?;
+                records.push(record);
+            }
+        }
+        tx.commit()?;
+        Ok(records)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_search_result(
         &self,
@@ -419,6 +480,82 @@ impl Database {
         Ok(source)
     }
 
+    /// Insert a whole iteration's ranked search results and corresponding
+    /// source rows in one transaction. Called from the orchestrator after
+    /// `search_and_rank` returns; collapses what used to be two round-trips
+    /// per ranked result (plus one fsync each) into a single commit.
+    pub async fn insert_search_results_and_sources_batch(
+        &self,
+        run_id: &str,
+        iteration_id: &str,
+        items: &[RankedInsert],
+    ) -> Result<Vec<SourceRecord>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction()?;
+        let mut sources = Vec::with_capacity(items.len());
+        {
+            let mut insert_search = tx.prepare(
+                "INSERT INTO search_results (id, iteration_id, query_id, title, url, snippet, rank_score, source_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            let mut insert_source = tx.prepare(
+                "INSERT INTO sources (id, run_id, iteration_id, url, title, domain, published_at, source_type, raw_text, excerpt, quality_score, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+
+            for item in items {
+                let now = Utc::now();
+                let search_id = Uuid::new_v4().to_string();
+                insert_search.execute(params![
+                    search_id,
+                    iteration_id,
+                    item.query_id,
+                    item.title,
+                    item.url,
+                    item.snippet,
+                    item.rank_score,
+                    item.source_type,
+                    encode_time(now),
+                ])?;
+
+                let source = SourceRecord {
+                    id: Uuid::new_v4().to_string(),
+                    run_id: run_id.to_string(),
+                    iteration_id: Some(iteration_id.to_string()),
+                    url: item.url.clone(),
+                    title: item.title.clone(),
+                    domain: item.domain.clone(),
+                    published_at: None,
+                    source_type: Some(item.source_type.clone()),
+                    raw_text: None,
+                    excerpt: item.snippet.clone(),
+                    quality_score: Some(item.rank_score),
+                    created_at: now,
+                };
+                insert_source.execute(params![
+                    source.id,
+                    source.run_id,
+                    source.iteration_id,
+                    source.url,
+                    source.title,
+                    source.domain,
+                    option_time(source.published_at),
+                    source.source_type,
+                    source.raw_text,
+                    source.excerpt,
+                    source.quality_score,
+                    encode_time(source.created_at),
+                ])?;
+                sources.push(source);
+            }
+        }
+        tx.commit()?;
+        Ok(sources)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn update_source_content(
         &self,
@@ -510,6 +647,50 @@ impl Database {
         )?;
 
         Ok(note)
+    }
+
+    /// Insert every evidence note for an iteration in one transaction.
+    /// Previously this was a `for` loop issuing one INSERT (and one fsync)
+    /// per note; batching it halves wall-clock cost for iterations with
+    /// multiple sources.
+    pub async fn insert_evidence_notes_batch(
+        &self,
+        iteration_id: &str,
+        notes: &[EvidenceNoteInsert<'_>],
+    ) -> Result<Vec<EvidenceNoteRecord>> {
+        if notes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction()?;
+        let mut records = Vec::with_capacity(notes.len());
+        {
+            let mut statement = tx.prepare(
+                "INSERT INTO evidence_notes (id, iteration_id, source_id, note_markdown, claim_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for note in notes {
+                let record = EvidenceNoteRecord {
+                    id: Uuid::new_v4().to_string(),
+                    iteration_id: iteration_id.to_string(),
+                    source_id: note.source_id.to_string(),
+                    note_markdown: note.note_markdown.to_string(),
+                    claim_type: note.claim_type.map(ToOwned::to_owned),
+                    created_at: Utc::now(),
+                };
+                statement.execute(params![
+                    record.id,
+                    record.iteration_id,
+                    record.source_id,
+                    record.note_markdown,
+                    record.claim_type,
+                    encode_time(record.created_at),
+                ])?;
+                records.push(record);
+            }
+        }
+        tx.commit()?;
+        Ok(records)
     }
 
     pub async fn list_evidence_notes(&self, iteration_id: &str) -> Result<Vec<EvidenceNoteRecord>> {
