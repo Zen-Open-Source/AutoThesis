@@ -223,8 +223,22 @@ async fn spawn_scheduled_run(
     let active_runs_clone = active_runs.clone();
     let ticker_clone = ticker.to_string();
 
+    // Bounded by the global run semaphore. We do NOT call `spawn_bounded_run`
+    // here directly because the scheduled-run bookkeeping (per-ticker active
+    // set and scheduled_runs row update) has to run in the same task as the
+    // orchestrator itself.
     tokio::spawn(async move {
+        let semaphore = state_clone.run_semaphore.clone();
+        let permit = match semaphore.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%run_id, "run semaphore closed, dropping scheduled run");
+                return;
+            }
+        };
+
         let result = orchestrator::execute_run(state_clone.clone(), run_id.clone()).await;
+        drop(permit);
 
         {
             let mut guard = active_runs_clone.lock().await;

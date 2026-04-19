@@ -13,6 +13,10 @@ pub struct Config {
     pub search_provider: String,
     pub max_iterations: u32,
     pub max_sources_per_iteration: usize,
+    /// Global cap on concurrent orchestrator runs across every entry point
+    /// (manual create, retry, batch, comparison, scanner promote, scheduled
+    /// refresh). Enforced by `AppState::run_semaphore`.
+    pub max_concurrent_runs: usize,
     pub scheduler_enabled: bool,
     pub scheduler_check_interval_secs: u64,
     pub scheduler_max_concurrent_runs: usize,
@@ -39,6 +43,9 @@ impl Config {
         let max_sources_per_iteration = env_or("MAX_SOURCES_PER_ITERATION", "8")
             .parse()
             .context("MAX_SOURCES_PER_ITERATION must be a valid usize")?;
+        let max_concurrent_runs = env_or("MAX_CONCURRENT_RUNS", "5")
+            .parse()
+            .context("MAX_CONCURRENT_RUNS must be a valid usize")?;
         let scheduler_enabled = env_or("SCHEDULER_ENABLED", "true")
             .parse()
             .context("SCHEDULER_ENABLED must be a valid boolean")?;
@@ -59,6 +66,9 @@ impl Config {
         if max_sources_per_iteration == 0 {
             bail!("MAX_SOURCES_PER_ITERATION must be at least 1");
         }
+        if max_concurrent_runs == 0 {
+            bail!("MAX_CONCURRENT_RUNS must be at least 1");
+        }
         if scheduler_check_interval_secs == 0 {
             bail!("SCHEDULER_CHECK_INTERVAL_SECS must be at least 1");
         }
@@ -77,6 +87,7 @@ impl Config {
             search_provider,
             max_iterations,
             max_sources_per_iteration,
+            max_concurrent_runs,
             scheduler_enabled,
             scheduler_check_interval_secs,
             scheduler_max_concurrent_runs,

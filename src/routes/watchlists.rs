@@ -18,7 +18,6 @@ use axum::{
     response::Json as AxumJson,
 };
 use serde::Deserialize;
-use tracing::error;
 
 #[derive(Debug, Deserialize)]
 pub struct DashboardQuery {
@@ -255,7 +254,7 @@ pub async fn refresh_dashboard_ticker(
         .await
         .map_err(AppError::from)?;
 
-    spawn_run(state, run.id.clone());
+    orchestrator::spawn_bounded_run(state, run.id.clone());
     Ok(AxumJson(CreateRunResponse {
         run_id: run.id,
         status: "queued".to_string(),
@@ -293,10 +292,4 @@ async fn ensure_watchlist_exists(state: &AppState, watchlist_id: &str) -> AppRes
     Ok(())
 }
 
-fn spawn_run(state: AppState, run_id: String) {
-    tokio::spawn(async move {
-        if let Err(error) = orchestrator::execute_run(state, run_id.clone()).await {
-            error!(%run_id, error = %error, "background orchestrator failed");
-        }
-    });
-}
+

@@ -10,7 +10,6 @@ use axum::{
     response::Json as AxumJson,
 };
 use std::collections::HashSet;
-use tracing::error;
 
 pub async fn create_comparison(
     State(state): State<AppState>,
@@ -87,14 +86,8 @@ pub async fn create_comparison(
             .await
             .map_err(AppError::from)?;
 
-        // Spawn background task for this run
-        let state_for_task = state.clone();
-        let run_id = run.id.clone();
-        tokio::spawn(async move {
-            if let Err(error) = orchestrator::execute_run(state_for_task, run_id.clone()).await {
-                error!(%run_id, error = %error, "background orchestrator failed");
-            }
-        });
+        // Spawn background task for this run (bounded by the global run semaphore).
+        orchestrator::spawn_bounded_run(state.clone(), run.id.clone());
     }
 
     // Update comparison status to queued

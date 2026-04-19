@@ -11,7 +11,6 @@ use axum::{
     extract::{Path, State},
     Json,
 };
-use tracing::error;
 
 pub async fn create_run(
     State(state): State<AppState>,
@@ -53,7 +52,7 @@ pub async fn create_run(
         .await
         .map_err(AppError::from)?;
 
-    spawn_run(state.clone(), run.id.clone());
+    orchestrator::spawn_bounded_run(state.clone(), run.id.clone());
 
     Ok(Json(CreateRunResponse {
         run_id: run.id,
@@ -146,7 +145,7 @@ pub async fn retry_run(
 
     let _ = comparison::sync_comparisons_for_run(&state, &run_id).await;
     let _ = batch::sync_batch_jobs_for_run(&state, &run_id).await;
-    spawn_run(state.clone(), run_id.clone());
+    orchestrator::spawn_bounded_run(state.clone(), run_id.clone());
 
     Ok(Json(CreateRunResponse {
         run_id,
@@ -246,14 +245,6 @@ async fn ensure_run_exists(state: &AppState, run_id: &str) -> AppResult<()> {
         return Err(AppError::NotFound);
     }
     Ok(())
-}
-
-fn spawn_run(state: AppState, run_id: String) {
-    tokio::spawn(async move {
-        if let Err(error) = orchestrator::execute_run(state, run_id.clone()).await {
-            error!(%run_id, error = %error, "background orchestrator failed");
-        }
-    });
 }
 
 pub async fn get_related_tickers(

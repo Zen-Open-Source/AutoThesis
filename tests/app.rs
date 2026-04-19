@@ -1135,6 +1135,7 @@ impl TestContext {
             search_provider: "mock".to_string(),
             max_iterations,
             max_sources_per_iteration: 4,
+            max_concurrent_runs: 5,
             scheduler_enabled: false,
             scheduler_check_interval_secs: 60,
             scheduler_max_concurrent_runs: 3,

@@ -11,7 +11,6 @@ use axum::{
     response::Json as AxumJson,
 };
 use std::collections::HashSet;
-use tracing::error;
 
 pub async fn create_batch_job(
     State(state): State<AppState>,
@@ -63,13 +62,7 @@ pub async fn create_batch_job(
             .await
             .map_err(AppError::from)?;
 
-        let state_for_task = state.clone();
-        let run_id = run.id.clone();
-        tokio::spawn(async move {
-            if let Err(error) = orchestrator::execute_run(state_for_task, run_id.clone()).await {
-                error!(%run_id, error = %error, "background orchestrator failed");
-            }
-        });
+        orchestrator::spawn_bounded_run(state.clone(), run.id.clone());
     }
 
     state

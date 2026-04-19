@@ -192,7 +192,8 @@ async fn persist_opportunity(
 pub async fn start_scan(state: &AppState, config_id: Option<&str>) -> Result<ScanRun> {
     let scan_run = state.db.create_scan_run(config_id).await?;
 
-    // Execute scan in background
+    // Scan runs are not orchestrator runs (no LLM research cycle per scan),
+    // so they do not acquire the run semaphore. Spawn directly.
     let state_clone = state.clone();
     let scan_run_id = scan_run.id.clone();
     tokio::spawn(async move {

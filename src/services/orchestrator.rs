@@ -9,12 +9,37 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
 #[error("run cancelled")]
 struct RunCancelled;
+
+/// Spawn an orchestrator run in the background, bounded by the global
+/// `AppState::run_semaphore` concurrency cap. Every code path that starts a
+/// research run (manual create, retry, batch, comparison, scanner promote,
+/// scheduler, watchlist refresh trigger, dashboard refresh) should go
+/// through this helper so that `config.max_concurrent_runs` is enforced
+/// globally, not just per-entry-point.
+pub fn spawn_bounded_run(state: AppState, run_id: String) {
+    tokio::spawn(async move {
+        // Clone the semaphore Arc out so we don't hold `state` while awaiting.
+        let semaphore = state.run_semaphore.clone();
+        let permit = match semaphore.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%run_id, "run semaphore closed, dropping run");
+                return;
+            }
+        };
+        let result = execute_run(state, run_id.clone()).await;
+        drop(permit);
+        if let Err(error) = result {
+            error!(%run_id, error = %error, "background orchestrator failed");
+        }
+    });
+}
 
 pub async fn execute_run(state: AppState, run_id: String) -> Result<()> {
     state.cancellation.register(&run_id);

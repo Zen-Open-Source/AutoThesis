@@ -5,14 +5,13 @@ use crate::{
         CreateScanRunRequest, CreateScanRunResponse, PromoteOpportunityRequest,
         PromoteOpportunityResponse, ScanOpportunityDetail, ScanRunDetail,
     },
-    services::scanner,
+    services::{orchestrator, scanner},
     utils::{normalize_ticker, AppResult},
 };
 use axum::{
     extract::{Path, State},
     Json,
 };
-use tracing::error;
 
 pub async fn create_scan_run(
     State(state): State<AppState>,
@@ -135,16 +134,8 @@ pub async fn promote_opportunity(
         .await
         .map_err(AppError::from)?;
 
-    // Spawn the research run
-    let state_clone = state.clone();
-    let run_id = run.id.clone();
-    tokio::spawn(async move {
-        if let Err(error) =
-            crate::services::orchestrator::execute_run(state_clone, run_id.clone()).await
-        {
-            error!(%run_id, error = %error, "background orchestrator failed");
-        }
-    });
+    // Spawn the research run (bounded by the global run semaphore).
+    orchestrator::spawn_bounded_run(state.clone(), run.id.clone());
 
     Ok(Json(PromoteOpportunityResponse {
         run_id: run.id,

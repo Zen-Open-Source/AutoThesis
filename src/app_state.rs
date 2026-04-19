@@ -13,6 +13,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub struct PromptStore {
@@ -63,6 +64,12 @@ pub struct AppState {
     pub prompts: PromptStore,
     pub price_provider: PriceProvider,
     pub cancellation: CancellationRegistry,
+    /// Global cap on concurrently-executing orchestrator runs. Every route
+    /// that spawns a background research run (manual create, retry, batch,
+    /// comparison, scanner promotion, scheduler, watchlist refresh trigger,
+    /// dashboard refresh) must acquire a permit from this semaphore before
+    /// kicking off the orchestrator. See `crate::services::orchestrator::spawn_bounded_run`.
+    pub run_semaphore: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -75,6 +82,7 @@ impl AppState {
         prompts: PromptStore,
         price_provider: PriceProvider,
     ) -> Self {
+        let run_semaphore = Arc::new(Semaphore::new(config.max_concurrent_runs));
         Self {
             config: Arc::new(config),
             db,
@@ -84,6 +92,7 @@ impl AppState {
             prompts,
             price_provider,
             cancellation: CancellationRegistry::new(),
+            run_semaphore,
         }
     }
 
