@@ -1,10 +1,28 @@
+use crate::utils::retry_with_backoff;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+/// How long a current-price result stays fresh in the in-memory cache. Short
+/// enough to feel live on a dashboard yet long enough to absorb bursts
+/// (dashboard refresh + alerts evaluate + portfolio render all hit the same
+/// ticker within milliseconds). Intraday movement inside this window is
+/// acceptable for the callers that use the PriceProvider.
+const PRICE_CACHE_TTL: Duration = Duration::from_secs(30);
+/// Max attempts for Yahoo Finance retries. Yahoo's public chart API returns
+/// the occasional 5xx under load; three tries with jittered exponential
+/// backoff recovers the vast majority of those without user-visible errors.
+const PRICE_FETCH_ATTEMPTS: u32 = 3;
 
 #[derive(Clone)]
 pub struct PriceProvider {
     client: reqwest::Client,
+    current_cache: Arc<Mutex<HashMap<String, (Instant, PriceData)>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,35 +45,50 @@ impl PriceProvider {
             .build()
             .context("failed to build reqwest client")?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            current_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
-    /// Fetch current price for a ticker using Yahoo Finance API
+    /// Fetch current price for a ticker using Yahoo Finance API. Served from
+    /// a 30-second in-memory cache to absorb duplicate calls from the same
+    /// dashboard render and retried with exponential backoff on transient
+    /// upstream errors.
     pub async fn get_current_price(&self, ticker: &str) -> Result<PriceData> {
-        // Use Yahoo Finance query API
+        let key = ticker.to_uppercase();
+        if let Some(cached) = self.cached_current(&key) {
+            return Ok(cached);
+        }
+        // URL-encode the ticker so symbols like `BRK.B` / `BF-B` behave and
+        // callers can't inject path segments.
         let url = format!(
             "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval=1d&range=1d",
-            ticker
+            urlencoding_encode(ticker)
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("failed to fetch price from Yahoo Finance")?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "Yahoo Finance returned status {}",
-                response.status()
-            ));
-        }
-
-        let body: YahooChartResponse = response
-            .json()
-            .await
-            .context("failed to parse Yahoo Finance response")?;
+        let body: YahooChartResponse = retry_with_backoff(
+            || async {
+                let response = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("failed to fetch price from Yahoo Finance")?;
+                if !response.status().is_success() {
+                    return Err(anyhow!(
+                        "Yahoo Finance returned status {}",
+                        response.status()
+                    ));
+                }
+                response
+                    .json::<YahooChartResponse>()
+                    .await
+                    .context("failed to parse Yahoo Finance response")
+            },
+            PRICE_FETCH_ATTEMPTS,
+        )
+        .await?;
 
         let chart = body
             .chart
@@ -107,16 +140,34 @@ impl PriceProvider {
             .map(|dt| dt.date_naive())
             .unwrap_or_else(|| Utc::now().date_naive());
 
-        Ok(PriceData {
-            ticker: ticker.to_uppercase(),
+        let data = PriceData {
+            ticker: key.clone(),
             date,
             open,
             close,
             high,
             low,
-            volume: volume as i64,
+            volume: volume.trunc() as i64,
             adjusted_close: meta.regular_market_price.unwrap_or(close),
-        })
+        };
+        self.store_current(key, data.clone());
+        Ok(data)
+    }
+
+    fn cached_current(&self, key: &str) -> Option<PriceData> {
+        let guard = self.current_cache.lock().ok()?;
+        let (ts, data) = guard.get(key)?;
+        if ts.elapsed() <= PRICE_CACHE_TTL {
+            Some(data.clone())
+        } else {
+            None
+        }
+    }
+
+    fn store_current(&self, key: String, data: PriceData) {
+        if let Ok(mut guard) = self.current_cache.lock() {
+            guard.insert(key, (Instant::now(), data));
+        }
     }
 
     /// Fetch historical prices for a ticker
@@ -143,27 +194,33 @@ impl PriceProvider {
 
         let url = format!(
             "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval=1d",
-            ticker, period1, period2
+            urlencoding_encode(ticker),
+            period1,
+            period2
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("failed to fetch historical prices from Yahoo Finance")?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "Yahoo Finance returned status {}",
-                response.status()
-            ));
-        }
-
-        let body: YahooChartResponse = response
-            .json()
-            .await
-            .context("failed to parse Yahoo Finance response")?;
+        let body: YahooChartResponse = retry_with_backoff(
+            || async {
+                let response = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("failed to fetch historical prices from Yahoo Finance")?;
+                if !response.status().is_success() {
+                    return Err(anyhow!(
+                        "Yahoo Finance returned status {}",
+                        response.status()
+                    ));
+                }
+                response
+                    .json::<YahooChartResponse>()
+                    .await
+                    .context("failed to parse Yahoo Finance response")
+            },
+            PRICE_FETCH_ATTEMPTS,
+        )
+        .await?;
 
         let chart = body
             .chart
@@ -211,13 +268,30 @@ impl PriceProvider {
                 close,
                 high,
                 low,
-                volume: volume as i64,
+                volume: volume.trunc() as i64,
                 adjusted_close: close,
             });
         }
 
         Ok(prices)
     }
+}
+
+/// Minimal URL path-segment encoder that preserves alphanumerics, dot, dash,
+/// underscore, and tilde (the unreserved set per RFC 3986) and percent-encodes
+/// everything else. We avoid pulling in the full `percent-encoding` crate for
+/// what amounts to ticker symbols.
+fn urlencoding_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.as_bytes() {
+        let b = *byte;
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
